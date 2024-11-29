@@ -22,7 +22,9 @@ class Browser(QMainWindow):
         self.cookies_file = os.path.join(self.data_dir, "cookies.json")
         self.settings_file = os.path.join(self.data_dir, "settings.json")
         
+        self.background_color = QColor()  # Initialize background_color
         self.font_color = QColor()  # Initialize font_color
+        self.font = QFont()  # Initialize font
 
         self.bookmarks = self.load_json(self.bookmarks_file)
         self.history = self.load_json(self.history_file)
@@ -602,7 +604,7 @@ class Browser(QMainWindow):
 
     def show_about_dialog(self):
         license_text = """
-        surfscape - Your own way to Navigate the Web with Freedom
+        surfscape - Your own Way to Navigate the Web with Freedom
 
         Author: André Machado, 2024
         License: GPL 3.0
