@@ -5,7 +5,7 @@ from PyQt6.QtCore import QUrl, Qt , QDateTime
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QColor, QFont
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtNetwork import QNetworkCookie
+from PyQt6.QtNetwork import QNetworkCookie, QNetworkProxy
 
 class Browser(QMainWindow):
     def __init__(self):
@@ -448,6 +448,19 @@ class Browser(QMainWindow):
         remove_all_cookies_button.clicked.connect(self.remove_all_cookies)
         layout.addWidget(remove_all_cookies_button)
         
+        # Enable/Disable Tor Buttons
+        tor_buttons_layout = QHBoxLayout()
+
+        enable_tor_button = QPushButton("Enable Tor")
+        enable_tor_button.clicked.connect(self.enable_tor_proxy)
+        tor_buttons_layout.addWidget(enable_tor_button)
+
+        disable_tor_button = QPushButton("Disable Tor")
+        disable_tor_button.clicked.connect(self.disable_tor_proxy)
+        tor_buttons_layout.addWidget(disable_tor_button)
+
+        layout.addLayout(tor_buttons_layout)
+        
         # User defined theme, font, and font color
         theme_font_layout = QHBoxLayout()
 
@@ -580,6 +593,18 @@ class Browser(QMainWindow):
 
     def reset_font(self):
         QApplication.instance().setFont(QFont())
+        
+    def enable_tor_proxy(self):
+        # Set up PyQt6 proxy
+        proxy = QNetworkProxy()
+        proxy.setType(QNetworkProxy.ProxyType.Socks5Proxy)
+        proxy.setHostName("127.0.0.1")
+        proxy.setPort(9050)
+        QNetworkProxy.setApplicationProxy(proxy)
+        
+    def disable_tor_proxy(self):
+        # Disable the proxy
+        QNetworkProxy.setApplicationProxy(QNetworkProxy())
             
     def save_settings(self):
         settings = {
