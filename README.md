@@ -50,7 +50,7 @@ Alternatively, on Windows, you can configure Tor to start at boot by creating a 
 
 This will ensure Tor starts automatically when you log in to your Windows account.
 
-After these steps you can enable or disable Tor bia Browser Settings.
+After these steps you can enable or disable Tor via Browser Settings.
 
 ## License
 This library is free software; you can redistribute it and/or modify it under
