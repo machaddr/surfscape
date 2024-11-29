@@ -28,9 +28,11 @@ class Browser(QMainWindow):
 
         self.bookmarks = self.load_json(self.bookmarks_file)
         self.history = self.load_json(self.history_file)
+        self.cookies = self.load_json(self.cookies_file)
         self.settings = self.load_json(self.settings_file)
         
         self.url_bar = QLineEdit()
+        self.url_bar.setPlaceholderText("Enter URL or Search Query")
         
         # Set the homepage
         self.homepage_edit = QLineEdit()
@@ -38,9 +40,7 @@ class Browser(QMainWindow):
             self.homepage_edit.setText(self.settings['homepage'])
         else:
             self.homepage_edit.setText("https://html.duckduckgo.com/html")
-
-        self.cookies = self.load_json(self.cookies_file)
-        
+            
         if os.path.exists(self.settings_file):
             self.load_settings()  # Load user settings
 
