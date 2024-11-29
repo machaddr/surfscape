@@ -30,6 +30,28 @@ pip install PyQt6 PyQt6-WebEngine
 
 Or you can install these dependencies using the package manager of your favorite Linux Distribution.
 
+## Tor Setup
+To start Tor via `systemctl` using your Linux Distribution of choice, run the following command:
+
+```bash
+sudo systemctl start tor
+```
+
+To enable Tor to start at boot, use:
+
+```bash
+sudo systemctl enable tor
+```
+
+Alternatively, on Windows, you can configure Tor to start at boot by creating a shortcut to `tor.exe` in the Startup folder. Follow these steps:
+
+1. Press `Win + R`, type `shell:startup`, and press Enter.
+2. Create a shortcut to `tor.exe` in the Startup folder.
+
+This will ensure Tor starts automatically when you log in to your Windows account.
+
+After these steps you can enable or disable Tor bia Browser Settings.
+
 ## License
 This library is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 3. See [LICENSE](LICENSE) for details.
