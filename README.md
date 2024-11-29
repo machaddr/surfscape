@@ -35,4 +35,4 @@ This library is free software; you can redistribute it and/or modify it under
 the terms of the GNU General Public License, version 3. See [LICENSE](LICENSE) for details.
 
 ## Author
-Surfspace is developed and maintained by André Machado. <br />You can contact him at sedzcat@gmail.com.
+Surfscace is developed and maintained by André Machado. <br />You can contact him at sedzcat@gmail.com.
