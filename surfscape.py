@@ -3,7 +3,7 @@
 import os, sys, json
 from PyQt6.QtCore import QUrl, Qt , QDateTime
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog
-from PyQt6.QtGui import QAction, QKeySequence, QShortcut, QColor, QFont
+from PyQt6.QtGui import QIcon, QPixmap, QAction, QKeySequence, QShortcut, QColor, QFont
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtNetwork import QNetworkCookie, QNetworkProxy
 
@@ -12,6 +12,12 @@ class Browser(QMainWindow):
         super().__init__()
         self.setWindowTitle("surfscape")
         self.setMinimumSize(800, 640)
+        
+        # Use a transparent pixmap
+        transparent_pixmap = QPixmap(1, 1)
+        transparent_pixmap.fill()
+        self.setWindowIcon(QIcon(transparent_pixmap))
+        
         self.showMaximized()
 
         # Paths for the data files
