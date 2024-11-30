@@ -31,6 +31,17 @@ pip install PyQt6 PyQt6-WebEngine
 Or you can install these dependencies using the package manager of your favorite Linux Distribution.
 
 ## Tor Setup
+
+To configure Tor to use specific ports and enable cookie authentication, add the following lines to your `torrc` file:
+
+```
+ControlPort 9051
+SocksPort 9050
+CookieAuthentication 1
+```
+
+The `torrc` file is typically located in `/etc/tor/` on Linux or in the HOME directory on Windows.
+
 To start Tor via `systemctl` using your Linux Distribution of choice, run the following command:
 
 ```bash
@@ -50,7 +61,7 @@ Alternatively, on Windows, you can configure Tor to start at boot by creating a 
 
 This will ensure Tor starts automatically when you log in to your Windows account.
 
-After these steps you can enable or disable Tor via Browser Settings.
+After these steps you can enable or disable Tor via Surfscape Browser Settings.
 
 ## License
 This library is free software; you can redistribute it and/or modify it under
