@@ -388,6 +388,7 @@ class Browser(QMainWindow):
         set_homepage_button = QPushButton("Set Homepage")
         set_homepage_button.clicked.connect(lambda: self.set_homepage(homepage_edit.text()))
         set_homepage_button.clicked.connect(lambda: self.homepage_edit.setText(homepage_edit.text()))
+        set_homepage_button.clicked.connect(lambda: QMessageBox.information(self, "Success", "Homepage set successfully"))
         layout.addWidget(set_homepage_button)
         
         # Separator
@@ -410,6 +411,7 @@ class Browser(QMainWindow):
         add_url_edit.setPlaceholderText("URL")
         add_button = QPushButton("Add")
         add_button.clicked.connect(lambda: self.add_bookmark(add_title_edit.text(), add_url_edit.text(), bookmarks_list))
+        add_button.clicked.connect(lambda: QMessageBox.information(self, "Success", "Bookmark added successfully"))
         add_layout.addWidget(add_title_edit)
         add_layout.addWidget(add_url_edit)
         add_layout.addWidget(add_button)
@@ -418,6 +420,7 @@ class Browser(QMainWindow):
         # Remove bookmark button
         remove_button = QPushButton("Remove Selected")
         remove_button.clicked.connect(lambda: self.remove_selected_bookmark(bookmarks_list))
+        remove_button.clicked.connect(lambda: QMessageBox.information(self, "Success", "Selected bookmark(s) removed successfully"))
         layout.addWidget(remove_button)
 
         # History section
@@ -435,6 +438,7 @@ class Browser(QMainWindow):
         # Clear all history button
         clear_history_button = QPushButton("Clear All History")
         clear_history_button.clicked.connect(self.clear_all_history)
+        clear_history_button.clicked.connect(lambda: QMessageBox.information(self, "Success", "All history cleared successfully"))
         layout.addWidget(clear_history_button)
 
         # Connect to update history when checkbox state changes
@@ -452,6 +456,7 @@ class Browser(QMainWindow):
         # Remove all cookies button
         remove_all_cookies_button = QPushButton("Remove All Cookies")
         remove_all_cookies_button.clicked.connect(self.remove_all_cookies)
+        remove_all_cookies_button.clicked.connect(lambda: QMessageBox.information(self, "Success", "All cookies removed successfully"))
         layout.addWidget(remove_all_cookies_button)
         
         # Enable/Disable Tor Buttons
@@ -459,10 +464,12 @@ class Browser(QMainWindow):
 
         enable_tor_button = QPushButton("Enable Tor")
         enable_tor_button.clicked.connect(self.enable_tor_proxy)
+        enable_tor_button.clicked.connect(lambda: QMessageBox.information(self, "Success", "Tor proxy enabled"))
         tor_buttons_layout.addWidget(enable_tor_button)
 
         disable_tor_button = QPushButton("Disable Tor")
         disable_tor_button.clicked.connect(self.disable_tor_proxy)
+        disable_tor_button.clicked.connect(lambda: QMessageBox.information(self, "Success", "Tor proxy disabled"))
         tor_buttons_layout.addWidget(disable_tor_button)
 
         layout.addLayout(tor_buttons_layout)
@@ -475,6 +482,7 @@ class Browser(QMainWindow):
         theme_font_layout.addWidget(theme_label)
         theme_button = QPushButton("Choose Color")
         theme_button.clicked.connect(self.choose_background_color)
+        theme_button.clicked.connect(lambda: QMessageBox.information(self, "Success", "Background color set successfully"))
         theme_font_layout.addWidget(theme_button)
         
         # Font Color
@@ -482,6 +490,7 @@ class Browser(QMainWindow):
         theme_font_layout.addWidget(font_color_label)
         font_color_button = QPushButton("Choose Font Color")
         font_color_button.clicked.connect(self.choose_font_color)
+        font_color_button.clicked.connect(lambda: QMessageBox.information(self, "Success", "Font color set successfully"))
         theme_font_layout.addWidget(font_color_button)
 
         # Font
@@ -489,6 +498,7 @@ class Browser(QMainWindow):
         theme_font_layout.addWidget(font_label)
         font_button = QPushButton("Choose Font")
         font_button.clicked.connect(self.choose_font)
+        font_button.clicked.connect(lambda: QMessageBox.information(self, "Success", "Font set successfully"))
         theme_font_layout.addWidget(font_button)
 
         layout.addLayout(theme_font_layout)
@@ -503,12 +513,14 @@ class Browser(QMainWindow):
         reset_theme_button.clicked.connect(self.reset_background_color)
         reset_theme_button.clicked.connect(self.reset_font_color)
         reset_theme_button.clicked.connect(self.reset_font)
+        reset_theme_button.clicked.connect(lambda: QMessageBox.information(self, "Success", "Colors and font reset successfully"))
         reset_theme_font_layout.addWidget(reset_theme_button)
         layout.addLayout(reset_theme_font_layout)
         
         # Save settings button
         save_settings_button = QPushButton("Save Settings")
         save_settings_button.clicked.connect(self.save_settings)
+        save_settings_button.clicked.connect(lambda: QMessageBox.information(self, "Success", "Settings saved successfully"))
         layout.addWidget(save_settings_button)
 
         dialog.setLayout(layout)
