@@ -1,6 +1,6 @@
 # Surfscape Web Browser
 
-Surfscape is a lightweight and customizable web browser built using PyQt6. It provides essential features for web browsing, including tabbed browsing, bookmarks, history, and customizable settings. Suitable for Tilling Window Managers.
+Surfscape is a lightweight and customizable web browser built using PyQt6. It provides essential features for web browsing, including tabbed browsing, bookmarks, history, and customizable settings. Suitable for Tilling Window Managers under Linux or *BSD.
 
 ![Surfscape Web Browser](https://raw.githubusercontent.com/machaddr/surfscape/main/screenshots/browser.png)
 
@@ -62,6 +62,27 @@ Alternatively, on Windows, you can configure Tor to start at boot by creating a 
 This will ensure Tor starts automatically when you log in to your Windows account.
 
 After these steps you can enable or disable Tor via Surfscape Browser Settings.
+
+## Contributing
+
+If you would like to contribute, please follow these steps:
+
+1. **Fork the repository** on GitHub.
+2. **Clone your forked repository** to your local machine.
+3. **Create a new branch** for your feature or bugfix:
+    ```bash
+    git checkout -b feature-name
+    ```
+4. **Make your changes** and commit them with clear and descriptive messages.
+5. **Push your changes** to your forked repository:
+    ```bash
+    git push origin feature-name
+    ```
+6. **Create a pull request** on GitHub, describing your changes and the problem they solve.
+
+Please ensure your code adheres to our coding standards and includes appropriate tests. We will review your pull request and provide feedback.
+
+Thank you for contributing to Surfscape!
 
 ## License
 This library is free software; you can redistribute it and/or modify it under
