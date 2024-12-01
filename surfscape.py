@@ -474,6 +474,21 @@ class Browser(QMainWindow):
 
         layout.addLayout(tor_buttons_layout)
         
+        # Enable/Disable I2P Buttons
+        i2p_buttons_layout = QHBoxLayout()
+        
+        enable_i2p_button = QPushButton("Enable I2P")
+        enable_i2p_button.clicked.connect(self.enable_i2p_proxy)
+        enable_i2p_button.clicked.connect(lambda: QMessageBox.information(self, "Success", "I2P proxy enabled"))
+        i2p_buttons_layout.addWidget(enable_i2p_button)
+        
+        disable_i2p_button = QPushButton("Disable I2P")
+        disable_i2p_button.clicked.connect(self.disable_i2p_proxy)
+        disable_i2p_button.clicked.connect(lambda: QMessageBox.information(self, "Success", "I2P proxy disabled"))
+        i2p_buttons_layout.addWidget(disable_i2p_button)
+        
+        layout.addLayout(i2p_buttons_layout)
+        
         # User defined theme, font, and font color
         theme_font_layout = QHBoxLayout()
 
@@ -613,7 +628,7 @@ class Browser(QMainWindow):
         QApplication.instance().setFont(QFont())
         
     def enable_tor_proxy(self):
-        # Set up PyQt6 proxy
+        # Set up Tor proxy
         proxy = QNetworkProxy()
         proxy.setType(QNetworkProxy.ProxyType.Socks5Proxy)
         proxy.setHostName("127.0.0.1")
@@ -621,6 +636,18 @@ class Browser(QMainWindow):
         QNetworkProxy.setApplicationProxy(proxy)
         
     def disable_tor_proxy(self):
+        # Disable the proxy
+        QNetworkProxy.setApplicationProxy(QNetworkProxy())
+        
+    def enable_i2p_proxy(self):
+        # Set up I2P proxy
+        proxy = QNetworkProxy()
+        proxy.setType(QNetworkProxy.ProxyType.HttpProxy)
+        proxy.setHostName("127.0.0.1")
+        proxy.setPort(4444)
+        QNetworkProxy.setApplicationProxy(proxy)
+        
+    def disable_i2p_proxy(self):
         # Disable the proxy
         QNetworkProxy.setApplicationProxy(QNetworkProxy())
             
