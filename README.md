@@ -63,6 +63,53 @@ This will ensure Tor starts automatically when you log in to your Windows accoun
 
 After these steps you can enable or disable Tor via Surfscape Browser Settings.
 
+## I2P Setup
+
+### Linux
+
+1. **Install I2P:**
+    You can install I2P using your distribution's package manager. For example, on Debian-based systems, run:
+    ```bash
+    sudo apt update
+    sudo apt install i2p
+    ```
+
+2. **Start I2P:**
+    To start I2P, use the following command:
+    ```bash
+    i2prouter start
+    ```
+
+3. **Enable I2P to start at boot:**
+    To ensure I2P starts automatically at boot, use:
+    ```bash
+    sudo systemctl enable i2p
+    ```
+
+4. **Configure I2P:**
+    Open your web browser and navigate to `http://127.0.0.1:7657` to access the I2P router console. Configure your I2P settings as needed.
+
+### Windows
+
+1. **Download I2P:**
+    Download the I2P installer from the [official I2P website](https://geti2p.net/en/download).
+
+2. **Install I2P:**
+    Run the installer and follow the on-screen instructions to install I2P.
+
+3. **Start I2P:**
+    After installation, start I2P from the Start Menu or by running `i2prouter` from the command prompt.
+
+4. **Configure I2P:**
+    Open your web browser and navigate to `http://127.0.0.1:7657` to access the I2P router console. Configure your I2P settings as needed.
+
+5. **Enable I2P to start at boot:**
+    To configure I2P to start at boot, create a shortcut to `i2prouter.exe` in the Startup folder. Follow these steps:
+    1. Press `Win + R`, type `shell:startup`, and press Enter.
+    2. Create a shortcut to `i2prouter.exe` in the Startup folder.
+
+After these steps, you can enable or disable I2P via Surfscape Browser Settings.
+
 ## Contributing
 
 If you would like to contribute, please follow these steps:
