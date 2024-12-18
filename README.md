@@ -10,6 +10,7 @@ Surfscape is a lightweight and customizable web browser built using PyQt6. It pr
 - **Bookmarks:** Save and manage your favorite web pages.
 - **History:** Keep track of your browsing history.
 - **Cookies Management:** Manage cookies for better privacy and control.
+- **AdBlocker:** Block unwanted ads for a cleaner browsing experience.
 - **Customizable Settings:** Change the homepage, theme, font, and more.
 - **Keyboard Shortcuts:** Use convenient keyboard shortcuts for common actions.
 
