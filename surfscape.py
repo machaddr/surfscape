@@ -1,11 +1,23 @@
 #!/usr/bin/env python3
 
-import os, sys, json
+import os, sys, json, requests
 from PyQt6.QtCore import QUrl, Qt , QDateTime
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog
 from PyQt6.QtGui import QIcon, QPixmap, QAction, QKeySequence, QShortcut, QColor, QFont
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtNetwork import QNetworkCookie, QNetworkProxy
+from PyQt6.QtWebEngineCore import QWebEngineUrlRequestInterceptor, QWebEngineProfile
+from adblockparser import AdblockRules
+
+class AdBlocker(QWebEngineUrlRequestInterceptor):
+    def __init__(self, rules):
+        super().__init__()
+        self.rules = rules
+
+    def interceptRequest(self, info):
+        url = info.requestUrl().toString()
+        if self.rules.should_block(url):
+            info.block(True)
 
 class Browser(QMainWindow):
     def __init__(self):
@@ -49,6 +61,16 @@ class Browser(QMainWindow):
             
         if os.path.exists(self.settings_file):
             self.load_settings()  # Load user settings
+            
+        # Download EasyList
+        easylist_url = "https://easylist.to/easylist/easylist.txt"
+        response = requests.get(easylist_url)
+        raw_rules = response.text.splitlines()
+        rules = AdblockRules(raw_rules)
+
+        # Set up ad blocker
+        self.ad_blocker = AdBlocker(rules)
+        QWebEngineProfile.defaultProfile().setUrlRequestInterceptor(self.ad_blocker)
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
