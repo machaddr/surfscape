@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-import os, sys, json, requests
-from PyQt6.QtCore import QUrl, Qt , QDateTime
+import os, sys, json, requests, asyncio, aiohttp
+from PyQt6.QtCore import QUrl, Qt , QDateTime, QThread, pyqtSignal, QObject
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog
 from PyQt6.QtGui import QIcon, QPixmap, QAction, QKeySequence, QShortcut, QColor, QFont
 from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -13,10 +13,30 @@ class AdBlocker(QWebEngineUrlRequestInterceptor):
     def __init__(self, rules):
         super().__init__()
         self.rules = rules
+        self.thread = QThread()
+        self.worker = AdBlockerWorker(rules)
+        self.worker.moveToThread(self.thread)
+        self.thread.start()
 
     def interceptRequest(self, info):
         url = info.requestUrl().toString()
-        if self.rules.should_block(url):
+        self.worker.check_url.emit(url, info)
+
+class AdBlockerWorker(QObject):
+    check_url = pyqtSignal(str, object)
+
+    def __init__(self, rules):
+        super().__init__()
+        self.rules = rules
+        self.check_url.connect(self.handle_check_url)
+
+    async def should_block(self, url):
+        return self.rules.should_block(url)
+
+    def handle_check_url(self, url, info):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        if loop.run_until_complete(self.should_block(url)):
             info.block(True)
 
 class Browser(QMainWindow):
@@ -62,13 +82,21 @@ class Browser(QMainWindow):
         if os.path.exists(self.settings_file):
             self.load_settings()  # Load user settings
             
-        # Download EasyList and EasyPrivacy
-        easylist_url = "https://easylist.to/easylist/easylist.txt"
-        easyprivacy_url = "https://easylist.to/easylist/easyprivacy.txt"
-        easylist_response = requests.get(easylist_url)
-        easyprivacy_response = requests.get(easyprivacy_url)
-        raw_rules = easylist_response.text.splitlines() + easyprivacy_response.text.splitlines()
-        rules = AdblockRules(raw_rules)
+        # Download EasyList, EasyPrivacy and Fanboy's Cookie List asynchronously
+        async def download_adblock_lists():
+            easylist_url = "https://easylist.to/easylist/easylist.txt"
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(easylist_url) as easylist_response:
+                    easylist_text = await easylist_response.text()
+
+            raw_rules = easylist_text.splitlines()
+            return AdblockRules(raw_rules)
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        rules = loop.run_until_complete(download_adblock_lists())
+        loop.close()
 
         # Set up ad blocker
         self.ad_blocker = AdBlocker(rules)
@@ -94,7 +122,6 @@ class Browser(QMainWindow):
         self.update_cookies_menu()  # Update cookies menu
         
         self.load_cookies_to_web_engine()  # Load cookies into the web engine
-        self.load_easylist_cookies()  # Load EasyList Cookie List
 
     def load_json(self, file_path):
         """Load data from a JSON file, or return an empty list if the file doesn't exist."""
@@ -354,23 +381,8 @@ class Browser(QMainWindow):
             cookie_action = QAction(f"{cookie['name']} - {cookie['domain']}", self)
             self.cookies_menu.addAction(cookie_action)
 
-    def load_easylist_cookies(self):
-        """ Load EasyList Cookie List """
-        easylist_cookies_url = "https://secure.fanboy.co.nz/fanboy-cookiemonster.txt"
-        response = requests.get(easylist_cookies_url)
-        raw_rules = response.text.splitlines()
-        self.cookie_rules = AdblockRules(raw_rules)
-
-    def should_block_cookie(self, cookie):
-        """ Check if a cookie should be blocked based on EasyList rules """
-        cookie_url = f"{cookie.domain()}{cookie.path()}"
-        return self.cookie_rules.should_block(cookie_url)
-
     def add_cookie(self, cookie):
         """ Add a cookie to the list and save it """
-        if self.should_block_cookie(cookie):
-            return
-
         cookie_dict = {
             'name': cookie.name().data().decode('utf-8'),
             'value': cookie.value().data().decode('utf-8'),
