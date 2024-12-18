@@ -62,10 +62,12 @@ class Browser(QMainWindow):
         if os.path.exists(self.settings_file):
             self.load_settings()  # Load user settings
             
-        # Download EasyList
+        # Download EasyList and EasyPrivacy
         easylist_url = "https://easylist.to/easylist/easylist.txt"
-        response = requests.get(easylist_url)
-        raw_rules = response.text.splitlines()
+        easyprivacy_url = "https://easylist.to/easylist/easyprivacy.txt"
+        easylist_response = requests.get(easylist_url)
+        easyprivacy_response = requests.get(easyprivacy_url)
+        raw_rules = easylist_response.text.splitlines() + easyprivacy_response.text.splitlines()
         rules = AdblockRules(raw_rules)
 
         # Set up ad blocker
