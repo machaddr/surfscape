@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import os, sys, json, requests, asyncio, aiohttp
+import os, sys, json, asyncio, aiohttp
 from PyQt6.QtCore import QUrl, Qt , QDateTime, QThread, pyqtSignal, QObject
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog
 from PyQt6.QtGui import QIcon, QPixmap, QAction, QKeySequence, QShortcut, QColor, QFont
@@ -12,7 +12,6 @@ from adblockparser import AdblockRules
 class AdBlocker(QWebEngineUrlRequestInterceptor):
     def __init__(self, rules):
         super().__init__()
-        self.rules = rules
         self.thread = QThread()
         self.worker = AdBlockerWorker(rules)
         self.worker.moveToThread(self.thread)
@@ -30,9 +29,21 @@ class AdBlockerWorker(QObject):
         self.rules = rules
         self.check_url.connect(self.handle_check_url)
 
-    async def should_block(self, url):
-        return self.rules.should_block(url)
+    async def download_adblock_lists(self):
+        easylist_url = "https://easylist.to/easylist/easylist.txt"
 
+        async with aiohttp.ClientSession() as session:
+            async with session.get(easylist_url) as easylist_response:
+                easylist_text = await easylist_response.text()
+
+        raw_rules = easylist_text.splitlines()
+        self.rules = AdblockRules(raw_rules)
+
+    async def should_block(self, url):
+        if self.rules is None:
+            await self.download_adblock_lists()
+        return self.rules.should_block(url)
+    
     def handle_check_url(self, url, info):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -44,6 +55,7 @@ class Browser(QMainWindow):
         super().__init__()
         self.setWindowTitle("surfscape")
         self.setMinimumSize(800, 640)
+        self.homepage_url = homepage_edit.text() if 'homepage_edit' in globals() else "https://html.duckduckgo.com/html"
         
         # Use a transparent pixmap
         transparent_pixmap = QPixmap(1, 1)
@@ -71,35 +83,13 @@ class Browser(QMainWindow):
         
         self.url_bar = QLineEdit()
         self.url_bar.setPlaceholderText("Enter URL or Search Query")
-        
-        # Set the homepage
-        self.homepage_edit = QLineEdit()
-        if 'homepage' in self.settings:
-            self.homepage_edit.setText(self.settings['homepage'])
-        else:
-            self.homepage_edit.setText("https://html.duckduckgo.com/html")
-            
-        if os.path.exists(self.settings_file):
-            self.load_settings()  # Load user settings
-            
-        # Download EasyList, EasyPrivacy and Fanboy's Cookie List asynchronously
-        async def download_adblock_lists():
-            easylist_url = "https://easylist.to/easylist/easylist.txt"
-
-            async with aiohttp.ClientSession() as session:
-                async with session.get(easylist_url) as easylist_response:
-                    easylist_text = await easylist_response.text()
-
-            raw_rules = easylist_text.splitlines()
-            return AdblockRules(raw_rules)
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        rules = loop.run_until_complete(download_adblock_lists())
-        loop.close()
 
         # Set up ad blocker
-        self.ad_blocker = AdBlocker(rules)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        worker = AdBlockerWorker(None)
+        loop.run_until_complete(worker.download_adblock_lists())
+        self.ad_blocker = AdBlocker(worker.rules)
         QWebEngineProfile.defaultProfile().setUrlRequestInterceptor(self.ad_blocker)
 
         self.tabs = QTabWidget()
@@ -111,7 +101,7 @@ class Browser(QMainWindow):
         self.tabs.tabCloseRequested.connect(self.close_current_tab)
         self.setCentralWidget(self.tabs)
 
-        self.add_new_tab(QUrl(self.homepage_edit.text()), "Homepage")
+        self.add_new_tab(QUrl(self.homepage_url), "Homepage")
         
         self.create_menu_bar()
         self.create_shortcuts()
@@ -176,7 +166,7 @@ class Browser(QMainWindow):
             self.setWindowTitle(f"surfscape - {title}")
 
     def navigate_home(self):
-        self.tabs.currentWidget().setUrl(QUrl(self.homepage_edit.text()))
+        self.tabs.currentWidget().setUrl(QUrl(self.homepage_url))
 
     def update_urlbar(self, q, browser=None):
         if browser != self.tabs.currentWidget():
@@ -433,13 +423,13 @@ class Browser(QMainWindow):
         
         global homepage_edit
         homepage_edit = QLineEdit()
-        homepage_edit.setText(self.homepage_edit.text())
+        homepage_edit.setText(self.homepage_url)
         layout.addWidget(homepage_edit)
         
         # Button to set homepage
         set_homepage_button = QPushButton("Set Homepage")
         set_homepage_button.clicked.connect(lambda: self.set_homepage(homepage_edit.text()))
-        set_homepage_button.clicked.connect(lambda: self.homepage_edit.setText(homepage_edit.text()))
+        set_homepage_button.clicked.connect(lambda: homepage_edit.setText(homepage_edit.text()))
         set_homepage_button.clicked.connect(lambda: QMessageBox.information(self, "Success", "Homepage set successfully"))
         layout.addWidget(set_homepage_button)
         
@@ -595,6 +585,7 @@ class Browser(QMainWindow):
 
     def set_homepage(self, homepage_url):
         self.homepage_url = homepage_url
+        homepage_edit.setText(homepage_url)
         self.save_settings()
 
     def add_bookmark(self, title, url, bookmarks_list):
