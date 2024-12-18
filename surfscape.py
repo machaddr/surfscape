@@ -356,7 +356,7 @@ class Browser(QMainWindow):
 
     def load_easylist_cookies(self):
         """ Load EasyList Cookie List """
-        easylist_cookies_url = "https://easylist.to/easylist/easylist_cookies.txt"
+        easylist_cookies_url = "https://secure.fanboy.co.nz/fanboy-cookiemonster.txt"
         response = requests.get(easylist_cookies_url)
         raw_rules = response.text.splitlines()
         self.cookie_rules = AdblockRules(raw_rules)
