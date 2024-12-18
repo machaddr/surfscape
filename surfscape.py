@@ -55,7 +55,6 @@ class Browser(QMainWindow):
         super().__init__()
         self.setWindowTitle("surfscape")
         self.setMinimumSize(800, 640)
-        self.homepage_url = homepage_edit.text() if 'homepage_edit' in globals() else "https://html.duckduckgo.com/html"
         
         # Use a transparent pixmap
         transparent_pixmap = QPixmap(1, 1)
@@ -80,6 +79,8 @@ class Browser(QMainWindow):
         self.history = self.load_json(self.history_file)
         self.cookies = self.load_json(self.cookies_file)
         self.settings = self.load_json(self.settings_file)
+        
+        self.homepage_url = self.settings.get('homepage') if self.settings else "https://html.duckduckgo.com/html"
         
         self.url_bar = QLineEdit()
         self.url_bar.setPlaceholderText("Enter URL or Search Query")
@@ -112,6 +113,8 @@ class Browser(QMainWindow):
         self.update_cookies_menu()  # Update cookies menu
         
         self.load_cookies_to_web_engine()  # Load cookies into the web engine
+        
+        self.load_settings()  # Load settings
 
     def load_json(self, file_path):
         """Load data from a JSON file, or return an empty list if the file doesn't exist."""
@@ -421,7 +424,6 @@ class Browser(QMainWindow):
         homepage_label = QLabel("Homepage:")
         layout.addWidget(homepage_label)
         
-        global homepage_edit
         homepage_edit = QLineEdit()
         homepage_edit.setText(self.homepage_url)
         layout.addWidget(homepage_edit)
@@ -582,10 +584,9 @@ class Browser(QMainWindow):
 
         dialog.setLayout(layout)
         dialog.exec()
-
+        
     def set_homepage(self, homepage_url):
         self.homepage_url = homepage_url
-        homepage_edit.setText(homepage_url)
         self.save_settings()
 
     def add_bookmark(self, title, url, bookmarks_list):
@@ -696,7 +697,7 @@ class Browser(QMainWindow):
             
     def save_settings(self):
         settings = {
-            'homepage': homepage_edit.text(),
+            'homepage': self.homepage_url,
             'background_color': self.background_color.name(),
             'font_color': self.font_color.name(),
             'font': QApplication.instance().font().toString()
@@ -707,7 +708,7 @@ class Browser(QMainWindow):
     def load_settings(self):
         with open(os.path.join(self.data_dir, 'settings.json'), 'r') as f:
             settings = json.load(f)
-        self.homepage_edit.setText(settings['homepage'])
+        self.homepage_url = settings['homepage']
         self.background_color = QColor(settings['background_color'])
         self.font_color = QColor(settings['font_color'])
         self.apply_styles()
