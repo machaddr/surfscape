@@ -92,6 +92,7 @@ class Browser(QMainWindow):
         self.update_cookies_menu()  # Update cookies menu
         
         self.load_cookies_to_web_engine()  # Load cookies into the web engine
+        self.load_easylist_cookies()  # Load EasyList Cookie List
 
     def load_json(self, file_path):
         """Load data from a JSON file, or return an empty list if the file doesn't exist."""
@@ -351,8 +352,23 @@ class Browser(QMainWindow):
             cookie_action = QAction(f"{cookie['name']} - {cookie['domain']}", self)
             self.cookies_menu.addAction(cookie_action)
 
+    def load_easylist_cookies(self):
+        """ Load EasyList Cookie List """
+        easylist_cookies_url = "https://easylist.to/easylist/easylist_cookies.txt"
+        response = requests.get(easylist_cookies_url)
+        raw_rules = response.text.splitlines()
+        self.cookie_rules = AdblockRules(raw_rules)
+
+    def should_block_cookie(self, cookie):
+        """ Check if a cookie should be blocked based on EasyList rules """
+        cookie_url = f"{cookie.domain()}{cookie.path()}"
+        return self.cookie_rules.should_block(cookie_url)
+
     def add_cookie(self, cookie):
         """ Add a cookie to the list and save it """
+        if self.should_block_cookie(cookie):
+            return
+
         cookie_dict = {
             'name': cookie.name().data().decode('utf-8'),
             'value': cookie.value().data().decode('utf-8'),
