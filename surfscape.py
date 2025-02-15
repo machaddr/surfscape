@@ -114,7 +114,8 @@ class Browser(QMainWindow):
         
         self.load_cookies_to_web_engine()  # Load cookies into the web engine
         
-        self.load_settings()  # Load settings
+        if os.path.exists(self.settings_file):
+            self.load_settings()  # Load settings
 
     def load_json(self, file_path):
         """Load data from a JSON file, or return an empty list if the file doesn't exist."""
