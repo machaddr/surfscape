@@ -131,7 +131,7 @@ class Browser(QMainWindow):
 
     def add_new_tab(self, qurl=None, label="Homepage"):
         if qurl is None:
-            qurl = QUrl(self.homepage_edit.text())
+            qurl = QUrl(self.homepage_url)
 
         browser = QWebEngineView()
         browser.setUrl(qurl)
