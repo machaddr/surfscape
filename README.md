@@ -22,11 +22,15 @@ Before installing Surfscape, make sure you have the following dependencies insta
 - [PyQt6](https://pypi.org/project/PyQt6/)
 - [PyQt6 WebEngine](https://pypi.org/project/PyQt6-WebEngine/)
 - [Adblockparser](https://pypi.org/project/adblockparser/)
+- [Anthropic](https://pypi.org/project/anthropic/)
+- [PyAudio](https://pypi.org/project/PyAudio/)
+- [SpeechRecognition](https://pypi.org/project/SpeechRecognition/)
+- [markdown](https://pypi.org/project/markdown/)
 
 You can install these dependencies using `pip`, the Python package installer. Open a terminal or command prompt and run the following command:
 
 ```bash
-pip install PyQt6 PyQt6-WebEngine adblockparser
+pip install PyQt6 PyQt6-WebEngine adblockparser anthropic pyaudio SpeechRecognition markdown
 ```
 
 Or you can install these dependencies using the package manager of your favorite Linux Distribution.
