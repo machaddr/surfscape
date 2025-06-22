@@ -2,13 +2,307 @@
 
 import os, sys, json, asyncio, aiohttp, re, pyaudio, speech_recognition as sr, anthropic, markdown
 from PyQt6 import QtWidgets, QtGui, QtCore
-from PyQt6.QtCore import QUrl, Qt , QDateTime, QThread, pyqtSignal, QObject
-from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog
+from PyQt6.QtCore import QUrl, Qt , QDateTime, QThread, pyqtSignal, QObject, QStandardPaths
+from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog, QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog
+from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
 from PyQt6.QtGui import QIcon, QPixmap, QAction, QKeySequence, QShortcut, QColor, QFont
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtNetwork import QNetworkCookie, QNetworkProxy
-from PyQt6.QtWebEngineCore import QWebEngineUrlRequestInterceptor, QWebEngineProfile
+from PyQt6.QtWebEngineCore import QWebEngineUrlRequestInterceptor, QWebEngineProfile, QWebEngineDownloadRequest
 from adblockparser import AdblockRules
+
+class DownloadItem:
+    def __init__(self, download_request):
+        self.download_request = download_request
+        self.filename = download_request.suggestedFileName()
+        self.url = download_request.url().toString()
+        self.total_bytes = download_request.totalBytes()
+        self.received_bytes = 0
+        self.state = "In Progress"
+        self.progress = 0
+
+class DownloadManager(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Download Manager")
+        self.setMinimumSize(600, 400)
+        self.downloads = []
+        
+        layout = QVBoxLayout(self)
+        
+        self.downloads_table = QTableWidget(0, 5)
+        self.downloads_table.setHorizontalHeaderLabels([
+            "Filename", "URL", "Progress", "Size", "Status"
+        ])
+        self.downloads_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.downloads_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.downloads_table)
+        
+        button_layout = QHBoxLayout()
+        self.clear_completed_btn = QPushButton("Clear Completed")
+        self.clear_completed_btn.clicked.connect(self.clear_completed_downloads)
+        self.open_folder_btn = QPushButton("Open Downloads Folder")
+        self.open_folder_btn.clicked.connect(self.open_downloads_folder)
+        
+        button_layout.addWidget(self.clear_completed_btn)
+        button_layout.addWidget(self.open_folder_btn)
+        button_layout.addStretch()
+        
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        button_layout.addWidget(close_btn)
+        
+        layout.addLayout(button_layout)
+    
+    def add_download(self, download_item):
+        self.downloads.append(download_item)
+        row = self.downloads_table.rowCount()
+        self.downloads_table.insertRow(row)
+        
+        self.downloads_table.setItem(row, 0, QTableWidgetItem(download_item.filename))
+        self.downloads_table.setItem(row, 1, QTableWidgetItem(download_item.url))
+        
+        progress_bar = QProgressBar()
+        progress_bar.setMinimum(0)
+        progress_bar.setMaximum(100)
+        self.downloads_table.setCellWidget(row, 2, progress_bar)
+        
+        size_text = self.format_bytes(download_item.total_bytes) if download_item.total_bytes > 0 else "Unknown"
+        self.downloads_table.setItem(row, 3, QTableWidgetItem(size_text))
+        self.downloads_table.setItem(row, 4, QTableWidgetItem(download_item.state))
+        
+        download_item.download_request.downloadProgress.connect(
+            lambda received, total, row=row: self.update_progress(row, received, total)
+        )
+        download_item.download_request.finished.connect(
+            lambda row=row: self.download_finished(row)
+        )
+    
+    def update_progress(self, row, received_bytes, total_bytes):
+        if row < len(self.downloads):
+            download_item = self.downloads[row]
+            download_item.received_bytes = received_bytes
+            download_item.total_bytes = total_bytes
+            
+            if total_bytes > 0:
+                progress = int((received_bytes / total_bytes) * 100)
+                download_item.progress = progress
+                
+                progress_bar = self.downloads_table.cellWidget(row, 2)
+                if progress_bar:
+                    progress_bar.setValue(progress)
+                
+                size_text = f"{self.format_bytes(received_bytes)} / {self.format_bytes(total_bytes)}"
+                self.downloads_table.setItem(row, 3, QTableWidgetItem(size_text))
+    
+    def download_finished(self, row):
+        if row < len(self.downloads):
+            download_item = self.downloads[row]
+            download_item.state = "Completed"
+            self.downloads_table.setItem(row, 4, QTableWidgetItem("Completed"))
+            
+            progress_bar = self.downloads_table.cellWidget(row, 2)
+            if progress_bar:
+                progress_bar.setValue(100)
+    
+    def clear_completed_downloads(self):
+        rows_to_remove = []
+        for i, download in enumerate(self.downloads):
+            if download.state == "Completed":
+                rows_to_remove.append(i)
+        
+        for row in reversed(rows_to_remove):
+            self.downloads_table.removeRow(row)
+            del self.downloads[row]
+    
+    def open_downloads_folder(self):
+        downloads_path = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
+        if os.path.exists(downloads_path):
+            os.system(f'xdg-open "{downloads_path}"' if os.name != 'nt' else f'explorer "{downloads_path}"')
+    
+    def format_bytes(self, bytes_count):
+        if bytes_count == 0:
+            return "0 B"
+        k = 1024
+        sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+        i = int(os.path.floor(os.path.log(bytes_count) / os.path.log(k)))
+        return f"{round(bytes_count / pow(k, i), 2)} {sizes[i]}"
+
+class FindDialog(QDialog):
+    def __init__(self, browser, parent=None):
+        super().__init__(parent)
+        self.browser = browser
+        self.setWindowTitle("Find in Page")
+        self.setModal(False)
+        self.setFixedSize(400, 100)
+        
+        layout = QVBoxLayout(self)
+        
+        search_layout = QHBoxLayout()
+        self.search_field = QLineEdit()
+        self.search_field.setPlaceholderText("Search text...")
+        self.search_field.returnPressed.connect(self.find_next)
+        search_layout.addWidget(self.search_field)
+        
+        self.find_next_btn = QPushButton("Next")
+        self.find_next_btn.clicked.connect(self.find_next)
+        search_layout.addWidget(self.find_next_btn)
+        
+        self.find_prev_btn = QPushButton("Previous")
+        self.find_prev_btn.clicked.connect(self.find_previous)
+        search_layout.addWidget(self.find_prev_btn)
+        
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        search_layout.addWidget(close_btn)
+        
+        layout.addLayout(search_layout)
+        
+        self.match_label = QLabel("No matches found")
+        layout.addWidget(self.match_label)
+        
+        self.search_field.textChanged.connect(self.search_text_changed)
+    
+    def find_next(self):
+        text = self.search_field.text()
+        if text:
+            current_widget = self.browser.tabs.currentWidget()
+            if current_widget:
+                current_widget.findText(text)
+    
+    def find_previous(self):
+        text = self.search_field.text()
+        if text:
+            current_widget = self.browser.tabs.currentWidget()
+            if current_widget:
+                from PyQt6.QtWebEngineCore import QWebEnginePage
+                current_widget.findText(text, QWebEnginePage.FindFlag.FindBackward)
+    
+    def search_text_changed(self):
+        text = self.search_field.text()
+        if text:
+            self.find_next()
+        else:
+            current_widget = self.browser.tabs.currentWidget()
+            if current_widget:
+                current_widget.findText("")
+    
+    def show_and_focus(self):
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.search_field.setFocus()
+        self.search_field.selectAll()
+
+class DevToolsDialog(QDialog):
+    def __init__(self, browser, parent=None):
+        super().__init__(parent)
+        self.browser = browser
+        self.setWindowTitle("Developer Tools")
+        self.setMinimumSize(800, 600)
+        
+        layout = QVBoxLayout(self)
+        
+        tabs = QTabWidget()
+        
+        # Console tab
+        self.console_widget = QtWidgets.QTextEdit()
+        self.console_widget.setReadOnly(True)
+        self.console_widget.setStyleSheet("background-color: #1e1e1e; color: #ffffff; font-family: monospace;")
+        tabs.addTab(self.console_widget, "Console")
+        
+        # Network tab
+        self.network_widget = QTableWidget(0, 4)
+        self.network_widget.setHorizontalHeaderLabels(["URL", "Method", "Status", "Size"])
+        tabs.addTab(self.network_widget, "Network")
+        
+        # Elements tab (simplified)
+        self.elements_widget = QtWidgets.QTextEdit()
+        self.elements_widget.setReadOnly(True)
+        self.elements_widget.setStyleSheet("font-family: monospace;")
+        tabs.addTab(self.elements_widget, "Elements")
+        
+        layout.addWidget(tabs)
+        
+        button_layout = QHBoxLayout()
+        
+        clear_console_btn = QPushButton("Clear Console")
+        clear_console_btn.clicked.connect(self.clear_console)
+        button_layout.addWidget(clear_console_btn)
+        
+        inspect_btn = QPushButton("Inspect Element")
+        inspect_btn.clicked.connect(self.inspect_element)
+        button_layout.addWidget(inspect_btn)
+        
+        button_layout.addStretch()
+        
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.close)
+        button_layout.addWidget(close_btn)
+        
+        layout.addLayout(button_layout)
+    
+    def clear_console(self):
+        self.console_widget.clear()
+    
+    def inspect_element(self):
+        current_widget = self.browser.tabs.currentWidget()
+        if current_widget:
+            current_widget.page().toHtml(self.update_elements_view)
+    
+    def update_elements_view(self, html_content):
+        self.elements_widget.setPlainText(html_content)
+    
+    def log_to_console(self, message):
+        self.console_widget.append(f"[{QDateTime.currentDateTime().toString()}] {message}")
+
+class CustomWebEngineView(QWebEngineView):
+    def __init__(self, browser, private_mode=False):
+        super().__init__()
+        self.browser = browser
+        self.private_mode = private_mode
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        
+        # Get the hit test result
+        hit_test_result = self.page().findChild(QtCore.QObject, "")
+        
+        # Standard navigation actions
+        back_action = menu.addAction("← Back")
+        back_action.triggered.connect(self.back)
+        back_action.setEnabled(self.history().canGoBack())
+        
+        forward_action = menu.addAction("→ Forward")
+        forward_action.triggered.connect(self.forward)
+        forward_action.setEnabled(self.history().canGoForward())
+        
+        reload_action = menu.addAction("⟳ Reload")
+        reload_action.triggered.connect(self.reload)
+        
+        menu.addSeparator()
+        
+        # Page actions
+        view_source_action = menu.addAction("View Page Source")
+        view_source_action.triggered.connect(self.browser.view_source)
+        
+        print_action = menu.addAction("Print...")
+        print_action.triggered.connect(self.browser.print_page)
+        
+        menu.addSeparator()
+        
+        # Developer tools
+        inspect_action = menu.addAction("Inspect Element")
+        inspect_action.triggered.connect(self.browser.show_developer_tools)
+        
+        menu.addSeparator()
+        
+        # Bookmark action
+        bookmark_action = menu.addAction("Add to Bookmarks")
+        bookmark_action.triggered.connect(self.browser.toggle_bookmark)
+        
+        # Show the menu
+        menu.exec(event.globalPos())
 
 class ClaudeAIWorker(QtCore.QThread):
     response_received = QtCore.pyqtSignal(str)
@@ -388,6 +682,7 @@ class Browser(QMainWindow):
         self.history_file = os.path.join(self.data_dir, "history.json")
         self.cookies_file = os.path.join(self.data_dir, "cookies.json")
         self.settings_file = os.path.join(self.data_dir, "settings.json")
+        self.session_file = os.path.join(self.data_dir, "session.json")
         
         self.background_color = QColor()  # Initialize background_color
         self.font_color = QColor()  # Initialize font_color
@@ -410,6 +705,19 @@ class Browser(QMainWindow):
         loop.run_until_complete(worker.download_adblock_lists())
         self.ad_blocker = AdBlocker(worker.rules)
         QWebEngineProfile.defaultProfile().setUrlRequestInterceptor(self.ad_blocker)
+        
+        # Set up download manager
+        self.download_manager = DownloadManager(self)
+        QWebEngineProfile.defaultProfile().downloadRequested.connect(self.handle_download_request)
+        
+        # Set up find dialog
+        self.find_dialog = FindDialog(self, self)
+        
+        # Set up developer tools
+        self.dev_tools = DevToolsDialog(self, self)
+        
+        # Set up private browsing profile
+        self.private_profile = QWebEngineProfile()
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
@@ -420,7 +728,8 @@ class Browser(QMainWindow):
         self.tabs.tabCloseRequested.connect(self.close_current_tab)
         self.setCentralWidget(self.tabs)
 
-        self.add_new_tab(QUrl(self.homepage_url), "Homepage")
+        # Restore session or create homepage tab
+        self.restore_session()
         
         self.create_menu_bar()
         self.create_shortcuts()
@@ -451,7 +760,7 @@ class Browser(QMainWindow):
         if qurl is None:
             qurl = QUrl(self.homepage_url)
 
-        browser = QWebEngineView()
+        browser = CustomWebEngineView(self)
         browser.setUrl(qurl)
 
         i = self.tabs.addTab(browser, label)
@@ -462,6 +771,24 @@ class Browser(QMainWindow):
         browser.loadFinished.connect(lambda _, i=i, browser=browser: self.tabs.setTabText(i, browser.page().title()))
         browser.loadFinished.connect(lambda: self.add_to_history(qurl, browser.page().title()))  # Add to history
         browser.page().profile().cookieStore().cookieAdded.connect(self.add_cookie)  # Add cookie
+
+    def add_private_tab(self, qurl=None, label="Private Tab"):
+        if qurl is None:
+            qurl = QUrl(self.homepage_url)
+
+        browser = CustomWebEngineView(self, private_mode=True)
+        # Create a new page with the private profile
+        from PyQt6.QtWebEngineCore import QWebEnginePage
+        private_page = QWebEnginePage(self.private_profile, browser)
+        browser.setPage(private_page)
+        browser.setUrl(qurl)
+
+        i = self.tabs.addTab(browser, f"🔒 {label}")
+        self.tabs.setCurrentIndex(i)
+
+        browser.urlChanged.connect(lambda qurl, browser=browser: self.update_urlbar(qurl, browser))
+        browser.loadFinished.connect(lambda _, i=i, browser=browser: self.update_title(browser))
+        browser.loadFinished.connect(lambda _, i=i, browser=browser: self.tabs.setTabText(i, f"🔒 {browser.page().title()}"))
 
     def tab_open_doubleclick(self, i):
         if i == -1:
@@ -515,6 +842,19 @@ class Browser(QMainWindow):
         new_tab_action = QAction("New Tab", self)
         new_tab_action.triggered.connect(lambda _: self.add_new_tab())
         file_menu.addAction(new_tab_action)
+        
+        new_private_tab_action = QAction("New Private Tab", self)
+        new_private_tab_action.triggered.connect(lambda: self.add_private_tab())
+        file_menu.addAction(new_private_tab_action)
+        
+        file_menu.addSeparator()
+        
+        print_action = QAction("Print", self)
+        print_action.triggered.connect(self.print_page)
+        file_menu.addAction(print_action)
+        
+        file_menu.addSeparator()
+        
         exit_action = QAction("Exit", self)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
@@ -540,6 +880,45 @@ class Browser(QMainWindow):
         select_all_action = QAction("Select All", self)
         select_all_action.triggered.connect(self.select_all_text)
         edit_menu.addAction(select_all_action)
+        
+        # Separator
+        edit_menu.addSeparator()
+        
+        find_action = QAction("Find in Page", self)
+        find_action.triggered.connect(self.show_find_dialog)
+        edit_menu.addAction(find_action)
+
+        # View menu
+        view_menu = menu_bar.addMenu("View")
+        
+        zoom_in_action = QAction("Zoom In", self)
+        zoom_in_action.triggered.connect(self.zoom_in)
+        view_menu.addAction(zoom_in_action)
+        
+        zoom_out_action = QAction("Zoom Out", self)
+        zoom_out_action.triggered.connect(self.zoom_out)
+        zoom_out_action.setShortcut(QKeySequence("Ctrl+_"))
+        view_menu.addAction(zoom_out_action)
+        
+        zoom_reset_action = QAction("Reset Zoom", self)
+        zoom_reset_action.triggered.connect(self.zoom_reset)
+        view_menu.addAction(zoom_reset_action)
+        
+        view_menu.addSeparator()
+        
+        fullscreen_action = QAction("Full Screen", self)
+        fullscreen_action.triggered.connect(self.toggle_fullscreen)
+        view_menu.addAction(fullscreen_action)
+        
+        view_menu.addSeparator()
+        
+        view_source_action = QAction("View Page Source", self)
+        view_source_action.triggered.connect(self.view_source)
+        view_menu.addAction(view_source_action)
+        
+        developer_tools_action = QAction("Developer Tools", self)
+        developer_tools_action.triggered.connect(self.show_developer_tools)
+        view_menu.addAction(developer_tools_action)
 
         # History menu (before Bookmarks)
         self.history_menu = menu_bar.addMenu("History")
@@ -552,6 +931,12 @@ class Browser(QMainWindow):
         # Cookies menu
         self.cookies_menu = menu_bar.addMenu("Cookies")
         self.update_cookies_menu()
+
+        # Downloads menu
+        downloads_menu = menu_bar.addMenu("Downloads")
+        downloads_action = QAction("Show Downloads", self)
+        downloads_action.triggered.connect(self.show_download_manager)
+        downloads_menu.addAction(downloads_action)
 
         # Settings menu
         settings_menu = menu_bar.addMenu("Settings")
@@ -609,6 +994,14 @@ class Browser(QMainWindow):
         QShortcut(QKeySequence("Alt+Left"), self).activated.connect(lambda: self.tabs.currentWidget().back())
         QShortcut(QKeySequence("Alt+Right"), self).activated.connect(lambda: self.tabs.currentWidget().forward())
         QShortcut(QKeySequence("Ctrl+D"), self).activated.connect(self.toggle_bookmark)
+        QShortcut(QKeySequence("Ctrl+F"), self).activated.connect(self.show_find_dialog)
+        QShortcut(QKeySequence("Ctrl+="), self).activated.connect(self.zoom_in)
+        QShortcut(QKeySequence("Ctrl+0"), self).activated.connect(self.zoom_reset)
+        QShortcut(QKeySequence("F11"), self).activated.connect(self.toggle_fullscreen)
+        QShortcut(QKeySequence("Ctrl+U"), self).activated.connect(self.view_source)
+        QShortcut(QKeySequence("Ctrl+P"), self).activated.connect(self.print_page)
+        QShortcut(QKeySequence("F12"), self).activated.connect(self.show_developer_tools)
+        QShortcut(QKeySequence("Ctrl+Shift+N"), self).activated.connect(lambda: self.add_private_tab())
 
     def toggle_bookmark(self):
         url = self.url_bar.text()
@@ -1066,6 +1459,103 @@ class Browser(QMainWindow):
         font = QFont()
         font.fromString(settings['font'])
         QApplication.instance().setFont(font)
+
+    def handle_download_request(self, download_request):
+        download_item = DownloadItem(download_request)
+        self.download_manager.add_download(download_item)
+        download_request.accept()
+    
+    def show_download_manager(self):
+        self.download_manager.show()
+        self.download_manager.raise_()
+        self.download_manager.activateWindow()
+    
+    def show_find_dialog(self):
+        self.find_dialog.show_and_focus()
+    
+    def zoom_in(self):
+        current_widget = self.tabs.currentWidget()
+        if current_widget:
+            current_zoom = current_widget.zoomFactor()
+            current_widget.setZoomFactor(min(current_zoom * 1.1, 5.0))
+    
+    def zoom_out(self):
+        current_widget = self.tabs.currentWidget()
+        if current_widget:
+            current_zoom = current_widget.zoomFactor()
+            current_widget.setZoomFactor(max(current_zoom * 0.9, 0.1))
+    
+    def zoom_reset(self):
+        current_widget = self.tabs.currentWidget()
+        if current_widget:
+            current_widget.setZoomFactor(1.0)
+    
+    def toggle_fullscreen(self):
+        if self.isFullScreen():
+            self.showMaximized()
+        else:
+            self.showFullScreen()
+    
+    def view_source(self):
+        current_widget = self.tabs.currentWidget()
+        if current_widget:
+            current_widget.page().toHtml(self.show_source_in_new_tab)
+    
+    def show_source_in_new_tab(self, html_content):
+        source_tab = CustomWebEngineView(self)
+        source_tab.setHtml(f'<html><head><title>Page Source</title></head><body><pre style="white-space: pre-wrap; font-family: monospace;">{html_content.replace("<", "&lt;").replace(">", "&gt;")}</pre></body></html>')
+        self.tabs.addTab(source_tab, "Page Source")
+        self.tabs.setCurrentWidget(source_tab)
+    
+    def print_page(self):
+        current_widget = self.tabs.currentWidget()
+        if current_widget:
+            printer = QPrinter()
+            print_dialog = QPrintDialog(printer, self)
+            if print_dialog.exec() == QDialog.DialogCode.Accepted:
+                current_widget.page().printToPdf(printer.outputFileName() or "page.pdf")
+    
+    def show_developer_tools(self):
+        self.dev_tools.show()
+        self.dev_tools.raise_()
+        self.dev_tools.activateWindow()
+    
+    def save_session(self):
+        session_data = []
+        for i in range(self.tabs.count()):
+            tab = self.tabs.widget(i)
+            if tab and hasattr(tab, 'url'):
+                session_data.append({
+                    'url': tab.url().toString(),
+                    'title': self.tabs.tabText(i)
+                })
+        
+        try:
+            with open(self.session_file, 'w') as f:
+                json.dump(session_data, f, indent=2)
+        except Exception as e:
+            print(f"Failed to save session: {e}")
+    
+    def restore_session(self):
+        if os.path.exists(self.session_file):
+            try:
+                with open(self.session_file, 'r') as f:
+                    session_data = json.load(f)
+                
+                if session_data:
+                    for tab_data in session_data:
+                        self.add_new_tab(QUrl(tab_data['url']), tab_data['title'])
+                else:
+                    self.add_new_tab(QUrl(self.homepage_url), "Homepage")
+            except Exception as e:
+                print(f"Failed to restore session: {e}")
+                self.add_new_tab(QUrl(self.homepage_url), "Homepage")
+        else:
+            self.add_new_tab(QUrl(self.homepage_url), "Homepage")
+    
+    def closeEvent(self, event):
+        self.save_session()
+        super().closeEvent(event)
 
     def show_about_dialog(self):
         license_text = """
