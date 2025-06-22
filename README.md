@@ -16,94 +16,171 @@ Surfscape is a lightweight and customizable web browser built using PyQt6. It pr
 
 ## Building Executable
 
-The project includes a complete build system that uses PyInstaller to create standalone executables for both Linux/Unix and Windows platforms. The build process creates a single executable file that includes all dependencies.
+Surfscape uses a professional Makefile-based build system that works across Linux, macOS, and Windows platforms. The build system uses PyInstaller to create standalone executables that include all dependencies.
 
-### Build Files
+### Build System
 
-- `build.sh` - Linux/Unix build script
-- `build.bat` - Windows build script
-- `clean.sh` - Linux/Unix cleanup script
-- `clean.bat` - Windows cleanup script
+- `Makefile` - Professional cross-platform build system
 - `surfscape.spec` - PyInstaller specification file
 - `requirements.txt` - Python dependencies
+- Legacy scripts: `build.sh`, `build.bat`, `clean.sh`, `clean.bat` (deprecated)
 
 ### Prerequisites for Building
 
-#### For Linux/Unix:
+#### System Dependencies
+
+**Linux/Unix:**
 - Python 3.6 or higher
 - pip3
+- make (usually pre-installed)
 - Development packages for audio (for PyAudio)
 
 On Ubuntu/Debian:
 ```bash
-sudo apt-get install python3-dev portaudio19-dev
+sudo apt-get install python3-dev portaudio19-dev build-essential
 ```
 
 On CentOS/RHEL/Fedora:
 ```bash
-sudo yum install python3-devel portaudio-devel
-# or for newer versions:
-sudo dnf install python3-devel portaudio-devel
+sudo dnf install python3-devel portaudio-devel make
+# or for older versions:
+sudo yum install python3-devel portaudio-devel make
 ```
 
-#### For Windows:
+**macOS:**
+- Python 3.6 or higher
+- Xcode Command Line Tools
+- Homebrew (recommended)
+
+```bash
+xcode-select --install
+brew install portaudio
+```
+
+**Windows:**
 - Python 3.6 or higher (from python.org)
-- Microsoft Visual C++ Build Tools (for some packages)
+- Microsoft Visual C++ Build Tools
+- make utility (via Chocolatey, MSYS2, or WSL)
 
-### Building
+```cmd
+# Using Chocolatey
+choco install make
 
-#### Linux/Unix
+# Or use Windows Subsystem for Linux (WSL)
+```
 
-1. Open a terminal in the project directory
-2. Run the build script:
-   ```bash
-   ./build.sh
-   ```
+### Quick Start
 
-The script will:
-- Create a virtual environment
-- Install all dependencies
-- Clean previous builds
-- Build the executable using PyInstaller
-- Test the executable
+The easiest way to build Surfscape is using the Makefile:
 
-#### Windows
+```bash
+# See all available commands
+make help
 
-1. Open Command Prompt or PowerShell in the project directory
-2. Run the build script:
-   ```cmd
-   build.bat
-   ```
+# Install system dependencies (Linux only)
+make install-system-deps
 
-The script will:
-- Create a virtual environment
-- Install all dependencies
-- Clean previous builds
-- Build the executable using PyInstaller
+# Build the executable (installs Python deps automatically)
+make build
+
+# Run from source (for development)
+make run
+
+# Clean build artifacts
+make clean
+```
+
+### Available Make Targets
+
+#### Build Targets
+- `make build` - Build the executable (default target)
+- `make package` - Create distribution package
+- `make debug` - Build with debug information
+
+#### Development Targets
+- `make deps` - Install Python dependencies
+- `make venv` - Create virtual environment
+- `make install` - Install in development mode
+- `make run` - Run from source
+- `make format` - Format code with black
+
+#### Quality Assurance
+- `make check` - Run code quality checks (flake8, pylint, black)
+- `make test` - Run test suite
+
+#### Maintenance Targets
+- `make clean` - Clean build artifacts
+- `make clean-all` - Clean everything including virtual environment
+- `make info` - Show project information
+- `make update-deps` - Update dependencies
+
+#### CI/CD Targets
+- `make ci` - Full CI pipeline (deps, check, test, build)
+- `make release` - Prepare release package
 
 ### Build Output
 
 The executable will be created in the `dist/` directory:
-- Linux/Unix: `dist/surfscape`
-- Windows: `dist/surfscape.exe`
+- **Linux/Unix:** `dist/surfscape`
+- **macOS:** `dist/surfscape`
+- **Windows:** `dist/surfscape.exe`
+
+### Advanced Build Configuration
+
+#### Virtual Environment
+
+The Makefile automatically manages a Python virtual environment in the `venv/` directory. This ensures clean dependency management and doesn't interfere with your system Python installation.
+
+#### Cross-Platform Support
+
+The Makefile automatically detects your platform and adjusts build commands accordingly:
+- Uses `python3` on Linux/macOS, falls back to `python` on Windows
+- Sets correct executable extensions (`.exe` on Windows)
+- Handles different virtual environment activation scripts
+
+#### Customizing the Build
+
+You can customize the build by editing `surfscape.spec`:
+
+```python
+# Add custom icon
+icon='path/to/icon.ico'  # Windows
+icon='path/to/icon.icns'  # macOS
+
+# Exclude modules to reduce size
+excludes=['module_to_exclude']
+
+# Add hidden imports
+hiddenimports=['your_module']
+```
 
 ### Cleaning Build Artifacts
 
-To clean all build artifacts:
+To clean build artifacts:
 
-#### Linux/Unix:
 ```bash
-./clean.sh
+# Clean build files only
+make clean
+
+# Clean everything including virtual environment
+make clean-all
 ```
 
-#### Windows:
-```cmd
-clean.bat
-```
+### Legacy Build Scripts
+
+The project still includes the original build scripts for compatibility:
+- `build.sh` (Linux/Unix)
+- `build.bat` (Windows)
+- `clean.sh` (Linux/Unix)
+- `clean.bat` (Windows)
+
+However, it's recommended to use the Makefile for new development as it provides better dependency management and cross-platform support.
 
 ### Distribution
 
 The built executable can be distributed as a single file. Users don't need Python or any dependencies installed.
+
+Use `make package` to create a complete distribution package that includes the executable, documentation, and other assets.
 
 #### System Requirements for End Users
 
@@ -134,9 +211,13 @@ Or you can install these dependencies using the package manager of your favorite
 
 ### Running from Source
 
-After installing dependencies, you can run Surfscape directly:
+After installing dependencies using the Makefile, you can run Surfscape directly:
 
 ```bash
+# Using the Makefile (recommended)
+make run
+
+# Or manually
 python3 surfscape.py
 ```
 
@@ -144,20 +225,78 @@ python3 surfscape.py
 
 ### Common Build Issues
 
-1. **PyAudio installation fails**:
-   - Install system audio development packages (see Prerequisites)
-   - On Windows, you may need Visual C++ Build Tools
+1. **Make command not found**:
+   - **Linux/macOS**: Install build tools with `sudo apt-get install build-essential` or `xcode-select --install`
+   - **Windows**: Install make via Chocolatey (`choco install make`) or use WSL
 
-2. **Missing modules in executable**:
+2. **PyAudio installation fails**:
+   - **Linux**: Use `make install-system-deps` to install system dependencies
+   - **macOS**: Install with `brew install portaudio`
+   - **Windows**: Install Visual C++ Build Tools
+
+3. **Python virtual environment issues**:
+   - Run `make clean-all` then `make build` to recreate the environment
+   - Ensure Python 3.6+ is installed and accessible
+
+4. **Missing modules in executable**:
    - Add missing modules to `hiddenimports` in `surfscape.spec`
+   - Use `make debug` to build with verbose output
 
-3. **Large executable size**:
+5. **Large executable size**:
    - Review dependencies in `requirements.txt`
-   - Consider using `--exclude-module` for unused packages
+   - Add unused packages to `excludes` in `surfscape.spec`
 
-4. **Executable doesn't start**:
-   - Run with `--debug` flag to see detailed output
-   - Check for missing system libraries with `ldd` (Linux) or Dependency Walker (Windows)
+6. **Permission denied errors**:
+   - Ensure you have write permissions in the project directory
+   - On Linux/macOS, the Makefile automatically sets executable permissions
+
+### Development Workflow
+
+For active development, use these commands:
+
+```bash
+# Set up development environment
+make venv deps
+
+# Run code quality checks
+make check
+
+# Format code
+make format
+
+# Run tests
+make test
+
+# Run from source
+make run
+
+# Build when ready
+make build
+```
+
+### CI/CD Integration
+
+The Makefile includes targets designed for continuous integration:
+
+```bash
+# Full CI pipeline
+make ci
+
+# Prepare release
+make release
+```
+
+### Version Control
+
+The project includes a comprehensive `.gitignore` file that excludes:
+- Python cache files and bytecode
+- Build artifacts and distribution files
+- Virtual environments
+- IDE configuration files
+- OS-specific files
+- Temporary files
+
+This ensures that only source code and essential configuration files are tracked in version control.
 
 ### Customizing the Build
 
