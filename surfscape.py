@@ -26,20 +26,6 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
         method = "GET"  # Default method, actual method detection requires more complex handling
         request_type = self._get_request_type(info.resourceType())
         
-        # Check for ad blocking based on settings
-        should_block_ads = False
-        if self.ad_blocker_rules:
-            if self.is_private:
-                # Check private browsing ad block setting
-                should_block_ads = self.browser.settings_manager.get('enable_adblock_private', True)
-            else:
-                # Check regular ad block setting
-                should_block_ads = self.browser.settings_manager.get('enable_adblock', True)
-            
-            if should_block_ads and self.ad_blocker_rules.should_block(url):
-                info.block(True)
-                return
-        
         # Add to DevTools network monitor if available
         if hasattr(self.browser, 'dev_tools') and self.browser.dev_tools:
             self.browser.dev_tools.add_network_request(
@@ -51,8 +37,27 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
                 time="--"
             )
         
+        # Ad blocking using EasyList only
+        if self.ad_blocker_rules:
+            try:
+                if self.ad_blocker_rules.should_block(url):
+                    # Update DevTools to show blocked request
+                    if hasattr(self.browser, 'dev_tools') and self.browser.dev_tools:
+                        self.browser.dev_tools.add_network_request(
+                            url=url,
+                            status="Blocked (EasyList)",
+                            request_type=request_type,
+                            initiator="AdBlocker",
+                            size="0 B",
+                            time="0 ms"
+                        )
+                    info.block(True)
+                    return
+            except Exception:
+                # If ad blocking fails, continue with normal request
+                pass
+        
         # Continue with normal request processing
-        # Don't block any requests here unless implementing ad blocking
     
     def _get_request_type(self, resource_type):
         """Convert QWebEngineUrlRequestInfo resource type to string"""
@@ -92,7 +97,7 @@ class SettingsManager:
             'confirm_close_multiple_tabs': True,
             'open_new_tab_next_to_current': True,
             'show_tab_close_buttons': True,
-            'enable_smooth_scrolling': True,
+            'enable_smooth_scrolling': False,
             
             # Appearance Settings
             'theme': 'system',  # system, light, dark, custom
@@ -118,8 +123,6 @@ class SettingsManager:
             'enable_do_not_track': True,
             'clear_data_on_exit': False,
             'incognito_by_default': False,
-            'enable_adblock': True,
-            'enable_adblock_private': True,
             
             # Network & Proxy Settings
             'proxy_type': 'none',  # none, http, socks5, tor, i2p
@@ -621,25 +624,6 @@ class AdvancedSettingsDialog(QDialog):
         self.do_not_track_cb = QCheckBox("Send Do Not Track requests")
         self.do_not_track_cb.setChecked(self.settings_manager.get('enable_do_not_track', True))
         group_layout.addWidget(self.do_not_track_cb, 2, 0, 1, 2)
-        
-        layout.addWidget(group)
-        
-        # Ad Blocking
-        group = QGroupBox("Ad Blocking")
-        group_layout = QGridLayout(group)
-        
-        self.adblock_cb = QCheckBox("Enable Ad Blocker")
-        self.adblock_cb.setChecked(self.settings_manager.get('enable_adblock', True))
-        group_layout.addWidget(self.adblock_cb, 0, 0)
-        
-        self.adblock_private_cb = QCheckBox("Enable Ad Blocker in Private Browsing")
-        self.adblock_private_cb.setChecked(self.settings_manager.get('enable_adblock_private', True))
-        group_layout.addWidget(self.adblock_private_cb, 0, 1)
-        
-        # Add informational label
-        info_label = QLabel("✓ Ad blocking is now fully supported in private browsing mode")
-        info_label.setStyleSheet("color: #008000; font-style: italic; margin-top: 5px;")
-        group_layout.addWidget(info_label, 1, 0, 1, 2)
         
         layout.addWidget(group)
         
@@ -1146,13 +1130,35 @@ class AdvancedSettingsDialog(QDialog):
     
     def _clear_history(self):
         if self.parent_browser:
-            self.parent_browser.clear_all_history()
-            QMessageBox.information(self, "Success", "Browsing history cleared.")
+            reply = QMessageBox.question(
+                self, 
+                "Clear All History", 
+                "Are you sure you want to clear all browsing history?\n\nThis action cannot be undone.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self.parent_browser.clear_all_history()
+                # Refresh the history list in the UI
+                self._populate_history_list()
+                QMessageBox.information(self, "Success", "All browsing history has been cleared.")
     
     def _clear_cookies(self):
         if self.parent_browser:
-            self.parent_browser.remove_all_cookies()
-            QMessageBox.information(self, "Success", "Cookies cleared.")
+            reply = QMessageBox.question(
+                self, 
+                "Clear All Cookies", 
+                "Are you sure you want to clear all cookies?\n\nThis will sign you out of websites and remove saved preferences.\nThis action cannot be undone.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            
+            if reply == QMessageBox.StandardButton.Yes:
+                self.parent_browser.remove_all_cookies()
+                # Refresh the cookies list in the UI
+                self._populate_cookies_list()
+                QMessageBox.information(self, "Success", "All cookies have been cleared.")
     
     def _clear_cache(self):
         QMessageBox.information(self, "Success", "Cache cleared.")
@@ -1315,10 +1321,6 @@ class AdvancedSettingsDialog(QDialog):
         self.settings_manager.set('enable_do_not_track', self.do_not_track_cb.isChecked())
         self.settings_manager.set('clear_data_on_exit', self.clear_on_exit_cb.isChecked())
         self.settings_manager.set('incognito_by_default', self.incognito_default_cb.isChecked())
-        
-        # Ad Blocking
-        self.settings_manager.set('enable_adblock', self.adblock_cb.isChecked())
-        self.settings_manager.set('enable_adblock_private', self.adblock_private_cb.isChecked())
         
         # Network settings with validation
         proxy_map = ['none', 'http', 'socks5', 'tor', 'i2p']
@@ -2529,6 +2531,24 @@ class CustomWebEngineView(QWebEngineView):
         super().__init__()
         self.browser = browser
         self.private_mode = private_mode
+        
+        # Performance optimizations
+        self._setup_performance_optimizations()
+    
+    def _setup_performance_optimizations(self):
+        """Set up performance optimizations for this web view"""
+        # Enable smooth scrolling and other performance features
+        page = self.page()
+        if page:
+            settings = page.settings()
+            if settings:
+                # Performance optimizations
+                settings.setAttribute(QWebEngineSettings.WebAttribute.ScrollAnimatorEnabled, False)  # Disable smooth scrolling by default
+                settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, True)
+                
+        # Optimize rendering
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
@@ -2962,12 +2982,17 @@ class Browser(QMainWindow):
         self.url_bar = QLineEdit()
         self.url_bar.setPlaceholderText("Enter URL or Search Query")
 
-        # Set up ad blocker
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        worker = AdBlockerWorker(None)
-        loop.run_until_complete(worker.download_adblock_lists())
-        self.ad_blocker_rules = worker.rules
+        # Set up ad blocker (enabled by default)
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            worker = AdBlockerWorker(None)
+            loop.run_until_complete(worker.download_adblock_lists())
+            self.ad_blocker_rules = worker.rules
+            print(f"Ad blocker initialized with {len(self.ad_blocker_rules.rules) if hasattr(self.ad_blocker_rules, 'rules') else 'unknown'} rules")
+        except Exception as e:
+            print(f"Failed to initialize ad blocker: {e}")
+            self.ad_blocker_rules = None
         
         # Set up download manager
         self.download_manager = DownloadManager(self)
@@ -2993,6 +3018,10 @@ class Browser(QMainWindow):
         # Set up default profile with network monitoring and ad blocking
         self.default_profile = QWebEngineProfile.defaultProfile()
         self.default_profile.setUrlRequestInterceptor(self.network_interceptor)
+        
+        # Performance optimizations for profiles
+        self._optimize_web_engine_profile(self.default_profile)
+        self._optimize_web_engine_profile(self.private_profile)
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
@@ -3009,13 +3038,16 @@ class Browser(QMainWindow):
         else:
             self.tabs.setTabPosition(QTabWidget.TabPosition.North)
         self.tabs.tabCloseRequested.connect(self.close_current_tab)
+        
+        # Performance: Initialize tab loading pool
+        self.tab_loading_pool = set()  # Track loading tabs
         self.setCentralWidget(self.tabs)
 
-        # Restore session or create homepage tab based on settings
+        # Performance: Defer session restoration for faster startup
         if self.settings_manager.get('restore_session', True):
-            self.restore_session()
+            QTimer.singleShot(200, self.restore_session)
         else:
-            self.add_new_tab(QUrl(self.homepage_url), "Homepage")
+            QTimer.singleShot(150, lambda: self.add_new_tab(QUrl(self.homepage_url), "Homepage"))
         
         self.create_menu_bar()
         self.create_shortcuts()
@@ -3025,11 +3057,13 @@ class Browser(QMainWindow):
         self.update_bookmarks_menu()
         self.update_cookies_menu()  # Update cookies menu
         
-        self.load_cookies_to_web_engine()  # Load cookies into the web engine
+        # Performance: Defer cookie loading until tabs are created
+        QTimer.singleShot(300, self.load_cookies_to_web_engine)
         
         # Load settings using new settings manager
         self.load_settings()
-        self._apply_settings_to_browser()
+        # Performance: Defer settings application for faster startup
+        QTimer.singleShot(100, self._apply_settings_to_browser)
         
         # Refresh developer tools data after browser is fully initialized
         self.dev_tools.refresh_all_data()
@@ -3061,10 +3095,10 @@ class Browser(QMainWindow):
             i = self.tabs.addTab(browser, label)
         self.tabs.setCurrentIndex(i)
 
+        # Performance: Optimize signal connections
         browser.urlChanged.connect(lambda qurl, browser=browser: self.update_urlbar(qurl, browser))
-        browser.loadFinished.connect(lambda _, i=i, browser=browser: self.update_title(browser))
-        browser.loadFinished.connect(lambda _, i=i, browser=browser: self.tabs.setTabText(i, browser.page().title()))
-        browser.loadFinished.connect(lambda: self.add_to_history(qurl, browser.page().title()))  # Add to history
+        browser.loadFinished.connect(lambda _, i=i, browser=browser: self._on_tab_load_finished(i, browser))
+        browser.loadStarted.connect(lambda: self._on_tab_load_started(browser))
         browser.page().profile().cookieStore().cookieAdded.connect(self.add_cookie)  # Add cookie
         
         # Apply current settings to the new tab
@@ -3298,7 +3332,7 @@ class Browser(QMainWindow):
         navtb.addAction(self.forward_button)
 
         self.reload_button = QAction("⟳", self)
-        self.reload_button.triggered.connect(lambda: self.tabs.currentWidget().reload())
+        self.reload_button.triggered.connect(self.refresh_current_tab)
         navtb.addAction(self.reload_button)
 
         self.home_button = QAction("Home", self)
@@ -3324,7 +3358,8 @@ class Browser(QMainWindow):
         # Apply default shortcuts (can be overridden by settings)
         QShortcut(QKeySequence("Ctrl+T"), self).activated.connect(lambda: self.add_new_tab())
         QShortcut(QKeySequence("Ctrl+Q"), self).activated.connect(lambda: self.close_current_tab(self.tabs.currentIndex()))
-        QShortcut(QKeySequence("Ctrl+R"), self).activated.connect(lambda: self.tabs.currentWidget().reload())
+        QShortcut(QKeySequence("Ctrl+R"), self).activated.connect(self.refresh_current_tab)
+        QShortcut(QKeySequence("F5"), self).activated.connect(self.refresh_current_tab)
         QShortcut(QKeySequence("Alt+Home"), self).activated.connect(self.navigate_home)
         QShortcut(QKeySequence("Alt+Left"), self).activated.connect(lambda: self.tabs.currentWidget().back())
         QShortcut(QKeySequence("Alt+Right"), self).activated.connect(lambda: self.tabs.currentWidget().forward())
@@ -3561,17 +3596,25 @@ class Browser(QMainWindow):
         
     def load_cookies_to_web_engine(self):
         """ Load cookies into the web engine """
-        profile = self.tabs.currentWidget().page().profile()
-        cookie_store = profile.cookieStore()
-        for cookie in self.cookies:
-            qcookie = QNetworkCookie(
-                cookie['name'].encode('utf-8'),
-                cookie['value'].encode('utf-8')
-            )
-            qcookie.setDomain(cookie['domain'])
-            qcookie.setPath(cookie['path'])
-            qcookie.setExpirationDate(QDateTime.fromString(cookie['expiry'], Qt.DateFormat.ISODate))
-            cookie_store.setCookie(qcookie)
+        # Check if tabs exist and have a current widget
+        if self.tabs.count() == 0 or not self.tabs.currentWidget():
+            return
+            
+        try:
+            profile = self.tabs.currentWidget().page().profile()
+            cookie_store = profile.cookieStore()
+            for cookie in self.cookies:
+                qcookie = QNetworkCookie(
+                    cookie['name'].encode('utf-8'),
+                    cookie['value'].encode('utf-8')
+                )
+                qcookie.setDomain(cookie['domain'])
+                qcookie.setPath(cookie['path'])
+                qcookie.setExpirationDate(QDateTime.fromString(cookie['expiry'], Qt.DateFormat.ISODate))
+                cookie_store.setCookie(qcookie)
+        except Exception as e:
+            # Silently handle any errors during cookie loading
+            pass
 
     def show_settings_dialog(self):
         dialog = AdvancedSettingsDialog(self.settings_manager, self)
@@ -3618,18 +3661,17 @@ class Browser(QMainWindow):
     def remove_all_cookies(self):
         self.cookies = []
         self.save_json(self.cookies_file, self.cookies)
-        profile = self.tabs.currentWidget().page().profile()
-        cookie_store = profile.cookieStore()
-        cookie_store.deleteAllCookies()
-        for cookie in self.cookies:
-            qcookie = QNetworkCookie(
-            cookie['name'].encode('utf-8'),
-            cookie['value'].encode('utf-8')
-            )
-            qcookie.setDomain(cookie['domain'])
-            qcookie.setPath(cookie['path'])
-            qcookie.setExpirationDate(QDateTime.fromString(cookie['expiry'], Qt.DateFormat.ISODate))
-            cookie_store.setCookie(qcookie)
+        
+        # Clear cookies from web engine
+        if self.tabs.count() > 0 and self.tabs.currentWidget():
+            try:
+                profile = self.tabs.currentWidget().page().profile()
+                cookie_store = profile.cookieStore()
+                cookie_store.deleteAllCookies()
+            except:
+                pass
+        
+        # Update UI displays
         self.update_cookies_menu()
         
     def choose_background_color(self):
@@ -3823,6 +3865,74 @@ class Browser(QMainWindow):
         
         # Apply web engine settings to all tabs
         self._apply_web_engine_settings()
+        
+        # Refresh all tabs to apply changes
+        self._refresh_all_tabs()
+    
+    def _refresh_all_tabs(self):
+        """Refresh all tabs to apply new settings"""
+        current_index = self.tabs.currentIndex()
+        for i in range(self.tabs.count()):
+            tab = self.tabs.widget(i)
+            if isinstance(tab, CustomWebEngineView):
+                # Only reload if tab has content
+                if tab.url().toString() and tab.url().toString() != 'about:blank':
+                    tab.reload()
+    
+    def _optimize_web_engine_profile(self, profile):
+        """Apply performance optimizations to a web engine profile"""
+        # Cache optimizations
+        profile.setCachePath(os.path.expanduser("~/.cache/surfscape"))
+        profile.setHttpCacheMaximumSize(100 * 1024 * 1024)  # 100MB cache
+        profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
+        
+        # Performance settings
+        settings = profile.settings()
+        if settings:
+            # Enable hardware acceleration and optimizations
+            settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, True)
+            settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
+            settings.setAttribute(QWebEngineSettings.WebAttribute.PdfViewerEnabled, True)
+            
+            # Optimize loading
+            settings.setAttribute(QWebEngineSettings.WebAttribute.AutoLoadImages, True)
+            settings.setAttribute(QWebEngineSettings.WebAttribute.DnsPrefetchEnabled, True)
+            
+            # Memory optimizations
+            settings.setAttribute(QWebEngineSettings.WebAttribute.FocusOnNavigationEnabled, False)
+            
+        # Custom user agent for better compatibility
+        profile.setHttpUserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Surfscape/1.0")
+    
+    def _on_tab_load_started(self, browser):
+        """Handle tab loading start with performance optimizations"""
+        self.tab_loading_pool.add(browser)
+        # Performance: Disable expensive operations during loading
+        if hasattr(self, 'dev_tools') and self.dev_tools.isVisible():
+            self.dev_tools.pause_updates()
+    
+    def _on_tab_load_finished(self, tab_index, browser):
+        """Handle tab loading completion with performance optimizations"""
+        # Remove from loading pool
+        self.tab_loading_pool.discard(browser)
+        
+        # Update tab title and favicon efficiently
+        self.update_title(browser)
+        self.tabs.setTabText(tab_index, browser.page().title())
+        
+        # Add to history (deferred for performance)
+        QTimer.singleShot(50, lambda: self.add_to_history(browser.url(), browser.page().title()))
+        
+        # Re-enable dev tools updates if no tabs are loading
+        if not self.tab_loading_pool and hasattr(self, 'dev_tools') and self.dev_tools.isVisible():
+            self.dev_tools.resume_updates()
+    
+    def refresh_current_tab(self):
+        """Refresh the current tab safely"""
+        if self.tabs.count() > 0 and self.tabs.currentWidget():
+            current_tab = self.tabs.currentWidget()
+            if hasattr(current_tab, 'reload'):
+                current_tab.reload()
     
     def _apply_web_engine_settings(self):
         """Apply privacy and security settings to web engine"""
