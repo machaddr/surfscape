@@ -11,7 +11,7 @@
 # Project information
 PROJECT_NAME := surfscape
 VERSION := $(shell grep -E '^__version__' $(PROJECT_NAME).py 2>/dev/null | cut -d'"' -f2 || echo "1.0.0")
-DESCRIPTION := Lightweight and customizable web browser built with PyQt6
+DESCRIPTION := Your Own Way to Navigate the Web with Freedom
 
 # Python configuration
 PYTHON := $(shell command -v python3 2>/dev/null || command -v python 2>/dev/null)
@@ -145,7 +145,7 @@ venv:
 	fi
 
 # Install dependencies
-deps: venv install-system-deps
+deps: venv
 	@echo "$(BLUE)[INFO]$(NC) Installing dependencies..."
 	@if [ -f "$(VENV_ACTIVATE)" ]; then \
 		. $(VENV_ACTIVATE) && \
@@ -299,28 +299,6 @@ ci: deps check test build
 release: clean-all ci package
 	$(call print_success,"Release package ready in $(DIST_DIR)/package/")
 
-# ============================================================================
-# Platform-specific Targets
-# ============================================================================
-
-# Install system dependencies (Linux)
-install-system-deps:
-ifeq ($(PLATFORM),linux)
-	$(call print_status,"Installing system dependencies for Linux...")
-	@if command -v apt-get >/dev/null 2>&1; then \
-		sudo apt-get update && \
-		sudo apt-get install -y python3-dev portaudio19-dev; \
-	elif command -v dnf >/dev/null 2>&1; then \
-		sudo dnf install -y python3-devel portaudio-devel; \
-	elif command -v yum >/dev/null 2>&1; then \
-		sudo yum install -y python3-devel portaudio-devel; \
-	else \
-		echo "$(YELLOW)[WARNING]$(NC) Unknown package manager. Please install python3-dev and portaudio19-dev manually"; \
-	fi
-else
-	@echo "$(YELLOW)[WARNING]$(NC) System dependency installation not supported on $(PLATFORM)"
-endif
-
 # Debug build with verbose output
 debug: clean-build
 	$(call print_header,Debug Build)
@@ -331,4 +309,4 @@ debug: clean-build
 		pyinstaller --clean --debug=all --console $(PROJECT_NAME).spec; \
 	fi
 
-.PHONY: venv format update-deps freeze ci release install-system-deps debug clean-build
+.PHONY: venv format update-deps freeze ci release debug clean-build
