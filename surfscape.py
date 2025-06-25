@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 
 import os, sys, json, asyncio, aiohttp, re, pyaudio, speech_recognition as sr, anthropic, markdown
-from PyQt6 import QtWidgets, QtGui, QtCore
 from PyQt6.QtCore import QUrl, Qt , QDateTime, QThread, pyqtSignal, QObject, QStandardPaths, QTimer
-from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog, QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QCheckBox, QSpinBox, QComboBox, QSlider, QGroupBox, QGridLayout, QScrollArea, QTextEdit, QRadioButton, QButtonGroup, QFrame, QWidget, QSplitter
+from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog, QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QCheckBox, QSpinBox, QComboBox, QSlider, QGroupBox, QGridLayout, QScrollArea, QTextEdit, QFrame, QWidget, QSplitter
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
 from PyQt6.QtGui import QIcon, QPixmap, QAction, QKeySequence, QShortcut, QColor, QFont
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtNetwork import QNetworkCookie, QNetworkProxy
-from PyQt6.QtWebEngineCore import QWebEngineUrlRequestInterceptor, QWebEngineProfile, QWebEngineDownloadRequest, QWebEngineSettings, QWebEngineUrlRequestInfo
+from PyQt6.QtWebEngineCore import QWebEngineUrlRequestInterceptor, QWebEngineProfile, QWebEngineSettings
 from adblockparser import AdblockRules
 
 class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
-    def __init__(self, browser, parent=None):
+    def __init__(self, browser, ad_blocker_rules=None, is_private=False, parent=None):
         super().__init__(parent)
         self.browser = browser
         self.request_count = 0
+        self.ad_blocker_rules = ad_blocker_rules
+        self.is_private = is_private
     
     def interceptRequest(self, info):
         # Capture network request details for DevTools
@@ -24,6 +25,20 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
         url = info.requestUrl().toString()
         method = "GET"  # Default method, actual method detection requires more complex handling
         request_type = self._get_request_type(info.resourceType())
+        
+        # Check for ad blocking based on settings
+        should_block_ads = False
+        if self.ad_blocker_rules:
+            if self.is_private:
+                # Check private browsing ad block setting
+                should_block_ads = self.browser.settings_manager.get('enable_adblock_private', True)
+            else:
+                # Check regular ad block setting
+                should_block_ads = self.browser.settings_manager.get('enable_adblock', True)
+            
+            if should_block_ads and self.ad_blocker_rules.should_block(url):
+                info.block(True)
+                return
         
         # Add to DevTools network monitor if available
         if hasattr(self.browser, 'dev_tools') and self.browser.dev_tools:
@@ -103,6 +118,8 @@ class SettingsManager:
             'enable_do_not_track': True,
             'clear_data_on_exit': False,
             'incognito_by_default': False,
+            'enable_adblock': True,
+            'enable_adblock_private': True,
             
             # Network & Proxy Settings
             'proxy_type': 'none',  # none, http, socks5, tor, i2p
@@ -604,6 +621,25 @@ class AdvancedSettingsDialog(QDialog):
         self.do_not_track_cb = QCheckBox("Send Do Not Track requests")
         self.do_not_track_cb.setChecked(self.settings_manager.get('enable_do_not_track', True))
         group_layout.addWidget(self.do_not_track_cb, 2, 0, 1, 2)
+        
+        layout.addWidget(group)
+        
+        # Ad Blocking
+        group = QGroupBox("Ad Blocking")
+        group_layout = QGridLayout(group)
+        
+        self.adblock_cb = QCheckBox("Enable Ad Blocker")
+        self.adblock_cb.setChecked(self.settings_manager.get('enable_adblock', True))
+        group_layout.addWidget(self.adblock_cb, 0, 0)
+        
+        self.adblock_private_cb = QCheckBox("Enable Ad Blocker in Private Browsing")
+        self.adblock_private_cb.setChecked(self.settings_manager.get('enable_adblock_private', True))
+        group_layout.addWidget(self.adblock_private_cb, 0, 1)
+        
+        # Add informational label
+        info_label = QLabel("✓ Ad blocking is now fully supported in private browsing mode")
+        info_label.setStyleSheet("color: #008000; font-style: italic; margin-top: 5px;")
+        group_layout.addWidget(info_label, 1, 0, 1, 2)
         
         layout.addWidget(group)
         
@@ -1279,6 +1315,10 @@ class AdvancedSettingsDialog(QDialog):
         self.settings_manager.set('enable_do_not_track', self.do_not_track_cb.isChecked())
         self.settings_manager.set('clear_data_on_exit', self.clear_on_exit_cb.isChecked())
         self.settings_manager.set('incognito_by_default', self.incognito_default_cb.isChecked())
+        
+        # Ad Blocking
+        self.settings_manager.set('enable_adblock', self.adblock_cb.isChecked())
+        self.settings_manager.set('enable_adblock_private', self.adblock_private_cb.isChecked())
         
         # Network settings with validation
         proxy_map = ['none', 'http', 'socks5', 'tor', 'i2p']
@@ -2858,25 +2898,9 @@ class ClaudeAIWidget(QWidget):
             f"<span style='color: blue; font-weight: bold;'>Assistant:</span> {formatted_response}<br>"
         )
 
-class AdBlocker(QWebEngineUrlRequestInterceptor):
+class AdBlockerWorker:
     def __init__(self, rules):
-        super().__init__()
-        self.thread = QThread()
-        self.worker = AdBlockerWorker(rules)
-        self.worker.moveToThread(self.thread)
-        self.thread.start()
-
-    def interceptRequest(self, info):
-        url = info.requestUrl().toString()
-        self.worker.check_url.emit(url, info)
-
-class AdBlockerWorker(QObject):
-    check_url = pyqtSignal(str, object)
-
-    def __init__(self, rules):
-        super().__init__()
         self.rules = rules
-        self.check_url.connect(self.handle_check_url)
 
     async def download_adblock_lists(self):
         easylist_url = "https://easylist.to/easylist/easylist.txt"
@@ -2887,17 +2911,6 @@ class AdBlockerWorker(QObject):
 
         raw_rules = easylist_text.splitlines()
         self.rules = AdblockRules(raw_rules)
-
-    async def should_block(self, url):
-        if self.rules is None:
-            await self.download_adblock_lists()
-        return self.rules.should_block(url)
-    
-    def handle_check_url(self, url, info):
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        if loop.run_until_complete(self.should_block(url)):
-            info.block(True)
 
 class Browser(QMainWindow):
     def __init__(self):
@@ -2954,8 +2967,7 @@ class Browser(QMainWindow):
         asyncio.set_event_loop(loop)
         worker = AdBlockerWorker(None)
         loop.run_until_complete(worker.download_adblock_lists())
-        self.ad_blocker = AdBlocker(worker.rules)
-        QWebEngineProfile.defaultProfile().setUrlRequestInterceptor(self.ad_blocker)
+        self.ad_blocker_rules = worker.rules
         
         # Set up download manager
         self.download_manager = DownloadManager(self)
@@ -2967,13 +2979,18 @@ class Browser(QMainWindow):
         # Set up developer tools
         self.dev_tools = DevToolsDialog(self, self)
         
-        # Set up network request interceptor for DevTools
-        self.network_interceptor = NetworkRequestInterceptor(self, self)
+        # Set up network request interceptor for DevTools and ad blocking (normal browsing)
+        self.network_interceptor = NetworkRequestInterceptor(self, self.ad_blocker_rules, is_private=False)
         
         # Set up private browsing profile
         self.private_profile = QWebEngineProfile()
         
-        # Set up default profile with network monitoring
+        # Set up private browsing profile with ad blocker and network monitoring
+        # Create a separate interceptor for private browsing
+        self.private_network_interceptor = NetworkRequestInterceptor(self, self.ad_blocker_rules, is_private=True)
+        self.private_profile.setUrlRequestInterceptor(self.private_network_interceptor)
+        
+        # Set up default profile with network monitoring and ad blocking
         self.default_profile = QWebEngineProfile.defaultProfile()
         self.default_profile.setUrlRequestInterceptor(self.network_interceptor)
 
