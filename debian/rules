@@ -1,0 +1,47 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --with python3 --buildsystem=pybuild
+
+override_dh_auto_clean:
+	dh_auto_clean
+	rm -rf build/
+	rm -rf dist/
+	rm -rf *.egg-info/
+	rm -rf build-venv/
+	find . -name "*.pyc" -delete
+	find . -name "__pycache__" -type d -exec rm -rf {} + || true
+
+override_dh_auto_build:
+	# Create temporary virtual environment for build
+	python3 -m venv build-venv
+	build-venv/bin/pip install --upgrade pip setuptools wheel
+	build-venv/bin/pip install PyInstaller
+	build-venv/bin/pip install -r requirements.txt
+	# Build static executable with PyInstaller
+	build-venv/bin/python -m PyInstaller --onefile --windowed --name surfscape surfscape.py
+
+override_dh_auto_install:
+	# Install the static executable
+	install -d debian/surfscape/usr/bin
+	install -m 755 dist/surfscape debian/surfscape/usr/bin/surfscape
+	
+	# Install desktop file and icon
+	install -d debian/surfscape/usr/share/applications
+	install -m 644 debian/surfscape.desktop debian/surfscape/usr/share/applications/
+	
+	install -d debian/surfscape/usr/share/icons/hicolor/256x256/apps
+	install -m 644 screenshots/browser.png debian/surfscape/usr/share/icons/hicolor/256x256/apps/surfscape.png
+	
+	# Install documentation
+	install -d debian/surfscape/usr/share/doc/surfscape
+	install -m 644 README.md debian/surfscape/usr/share/doc/surfscape/
+	install -m 644 LICENSE debian/surfscape/usr/share/doc/surfscape/copyright
+
+override_dh_installdocs:
+	dh_installdocs README.md
+
+override_dh_installchangelogs:
+	dh_installchangelogs
+
+.PHONY: override_dh_auto_clean override_dh_auto_build override_dh_auto_install

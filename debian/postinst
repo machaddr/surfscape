@@ -1,0 +1,36 @@
+#!/bin/bash
+
+# Post-installation script for surfscape
+
+set -e
+
+case "$1" in
+    configure)
+        # Update desktop database
+        if which update-desktop-database >/dev/null 2>&1 ; then
+            update-desktop-database -q /usr/share/applications
+        fi
+        
+        # Update icon cache
+        if which gtk-update-icon-cache >/dev/null 2>&1 ; then
+            gtk-update-icon-cache -q /usr/share/icons/hicolor
+        fi
+        
+        # Update MIME database
+        if which update-mime-database >/dev/null 2>&1 ; then
+            update-mime-database /usr/share/mime
+        fi
+        ;;
+    
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+        
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+        ;;
+esac
+
+#DEBHELPER#
+
+exit 0

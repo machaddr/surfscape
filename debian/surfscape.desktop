@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Surfscape
+Comment=Your Own Way to Navigate the Web with Freedom
+Exec=surfscape
+Icon=surfscape
+Terminal=false
+Categories=Network;WebBrowser;
+Keywords=web;browser;internet;surfscape;
+StartupNotify=true
+MimeType=text/html;application/xhtml+xml;application/xml;text/xml;

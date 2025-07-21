@@ -1,0 +1,38 @@
+Source: surfscape
+Section: web
+Priority: optional
+Maintainer: André Machado <machaddr@falanet.org>
+Build-Depends: debhelper-compat (= 12),
+               dh-python,
+               python3-all,
+               python3-setuptools,
+               python3-pip,
+               python3-venv,
+               python3-pyqt6,
+               python3-pyaudio,
+               python3-markdown,
+               python3-dev
+Standards-Version: 4.6.0
+Homepage: https://github.com/machaddr/surfscape
+X-Python3-Version: >= 3.8
+
+Package: surfscape
+Architecture: amd64
+Depends: ${misc:Depends}
+Description: Your Own Way to Navigate the Web with Freedom (static build)
+ Surfscape is a modern web browser built with PyQt6 that provides:
+ .
+  * Advanced ad-blocking with EasyList support
+  * Built-in Claude AI assistant for web research
+  * Developer tools with console, elements, network monitoring
+  * Private browsing mode
+  * Bookmark and history management
+  * Download manager
+  * Find in page functionality
+  * Source code viewer
+  * Performance monitoring
+  * Customizable themes and settings
+  * Session restoration
+ .
+ This package contains a statically-built executable with all dependencies
+ bundled, so no additional Python packages are required.

@@ -1,0 +1,18 @@
+surfscape (1.0-1) unstable; urgency=medium
+
+  * Initial release of Surfscape
+  * Modern web browser with PyQt6 WebEngine
+  * Features include:
+    - Advanced ad-blocking with EasyList support
+    - Built-in Claude AI assistant for web research
+    - Developer tools with console, elements, network monitoring
+    - Private browsing mode
+    - Bookmark and history management
+    - Download manager
+    - Find in page functionality
+    - Source code viewer
+    - Performance monitoring
+    - Customizable themes and settings
+    - Session restoration
+
+ -- André Machado <machaddr@falanet.org>  Mon, 21 Jul 2025 12:36:21 +0100

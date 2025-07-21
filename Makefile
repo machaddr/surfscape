@@ -82,7 +82,7 @@ endef
 # Main Targets
 # ============================================================================
 
-.PHONY: all help build clean install deps check test run package info
+.PHONY: all help build clean clean-debian install deps check test run package info
 
 # Default target
 all: build
@@ -108,6 +108,7 @@ help:
 	@echo ""
 	@echo "  $(BOLD)Maintenance Targets:$(NC)"
 	@echo "    clean      - Clean build artifacts"
+	@echo "    clean-debian - Clean debian build artifacts"
 	@echo "    clean-all  - Clean everything including venv"
 	@echo "    info       - Show project information"
 	@echo ""
@@ -254,6 +255,22 @@ clean-all: clean
 	@rm -rf $(VENV_DIR)/
 	$(call print_success,"Full cleanup completed")
 
+# Clean debian build artifacts
+clean-debian:
+	$(call print_status,"Cleaning Debian build artifacts...")
+	@rm -rf debian/.debhelper/ 2>/dev/null || true
+	@rm -rf debian/$(PROJECT_NAME)/ 2>/dev/null || true
+	@rm -rf debian/tmp/ 2>/dev/null || true
+	@rm -rf debian/files 2>/dev/null || true
+	@rm -rf debian/*.log 2>/dev/null || true
+	@rm -rf debian/*.substvars 2>/dev/null || true
+	@rm -rf debian/*.debhelper 2>/dev/null || true
+	@rm -rf build-venv/ 2>/dev/null || true
+	@rm -rf ../*.deb 2>/dev/null || true
+	@rm -rf ../*.changes 2>/dev/null || true
+	@rm -rf ../*.buildinfo 2>/dev/null || true
+	$(call print_success,"Debian cleanup completed")
+
 # ============================================================================
 # Development Utilities
 # ============================================================================
@@ -309,4 +326,4 @@ debug: clean-build
 		pyinstaller --clean --debug=all --console $(PROJECT_NAME).spec; \
 	fi
 
-.PHONY: venv format update-deps freeze ci release debug clean-build
+.PHONY: venv format update-deps freeze ci release debug clean-build clean-debian
