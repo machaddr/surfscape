@@ -39,8 +39,16 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path "installer/Output" | Out-Null
 
+      - name: Verify build outputs
+        shell: pwsh
+        run: |
+          Write-Host "Workspace: $env:GITHUB_WORKSPACE"
+          Get-ChildItem -Path dist -Recurse -ErrorAction SilentlyContinue | Select-Object -First 5 | ForEach-Object { Write-Host $_.FullName }
+          if (-not (Test-Path "dist/surfscape")) { Write-Error "dist/surfscape not found" }
+          if (-not (Test-Path "installer/Surfscape.iss")) { Write-Error "installer/Surfscape.iss not found" }
+
       - name: Compile installer (Inno Setup)
-        uses: Minionguyjpro/Inno-Setup-Action@v1.2.4
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.7
         with:
           path: installer/Surfscape.iss
           options: >-
