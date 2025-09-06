@@ -3371,7 +3371,9 @@ class Browser(QMainWindow):
 
         # Performance: Optimize signal connections
         browser.urlChanged.connect(lambda qurl, browser=browser: self.update_urlbar(qurl, browser))
+        browser.urlChanged.connect(lambda qurl, i=i: self._update_tab_favicon(i, qurl))
         browser.loadFinished.connect(lambda _, i=i, browser=browser: self._on_tab_load_finished(i, browser))
+        browser.page().iconUrlChanged.connect(lambda _url, i=i, b=browser: self._update_tab_favicon(i, b.url()))
         browser.loadStarted.connect(lambda: self._on_tab_load_started(browser))
         browser.page().profile().cookieStore().cookieAdded.connect(self.add_cookie)  # Add cookie
         
@@ -3410,8 +3412,10 @@ class Browser(QMainWindow):
         self.tabs.setCurrentIndex(i)
 
         browser.urlChanged.connect(lambda qurl, browser=browser: self.update_urlbar(qurl, browser))
+        browser.urlChanged.connect(lambda qurl, i=i: self._update_tab_favicon(i, qurl))
         browser.loadFinished.connect(lambda _, i=i, browser=browser: self.update_title(browser))
         browser.loadFinished.connect(lambda _, i=i, browser=browser: self.tabs.setTabText(i, f"🔒 {browser.page().title()}"))
+        browser.page().iconUrlChanged.connect(lambda _url, i=i, b=browser: self._update_tab_favicon(i, b.url()))
 
     def tab_open_doubleclick(self, i):
         if i == -1:
@@ -3649,6 +3653,38 @@ class Browser(QMainWindow):
         self._fetch_favicon(url, key, [apply_icon])
 
     # -------------------- End favicon utilities --------------------
+
+    def _update_tab_favicon(self, tab_index: int, url) -> None:
+        """Set the tab icon for the given index using the page's favicon.
+        Falls back to a default icon while fetching.
+        """
+        try:
+            url_str = url.toString() if isinstance(url, QUrl) else str(url)
+        except Exception:
+            url_str = str(url)
+
+        # Show a placeholder immediately
+        try:
+            self.tabs.setTabIcon(tab_index, self._favicon_default)
+        except Exception:
+            pass
+
+        # Try cache first, else fetch async
+        icon = self._get_favicon_cached(url_str)
+        if icon:
+            try:
+                self.tabs.setTabIcon(tab_index, icon)
+            except Exception:
+                pass
+            return
+
+        def apply_icon(ic: QIcon):
+            try:
+                self.tabs.setTabIcon(tab_index, ic)
+            except Exception:
+                pass
+
+        self._get_favicon_async(url_str, apply_icon)
 
     def create_menu_bar(self):
         menu_bar = self.menuBar()
@@ -4732,6 +4768,11 @@ class Browser(QMainWindow):
         # Update tab title and favicon efficiently
         self.update_title(browser)
         self.tabs.setTabText(tab_index, browser.page().title())
+        # Update favicon post-load
+        try:
+            self._update_tab_favicon(tab_index, browser.url())
+        except Exception:
+            pass
         
         # Add to history (deferred for performance)
         QTimer.singleShot(50, lambda: self.add_to_history(browser.url(), browser.page().title()))
