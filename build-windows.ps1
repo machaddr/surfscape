@@ -54,7 +54,16 @@ if (-not (Test-Path "surfscape.py")) {
 
 # Resolve Python
 function Resolve-Python {
-    $candidates = @('py -3', 'py', 'python3', 'python')
+    # Prefer the interpreter provided by actions/setup-python
+    if ($env:pythonLocation) {
+        $pyExe = Join-Path -Path $env:pythonLocation -ChildPath 'python.exe'
+        if (Test-Path $pyExe) {
+            try { & $pyExe --version *> $null; if ($LASTEXITCODE -eq 0) { return @($pyExe) } } catch {}
+        }
+    }
+
+    # Fallbacks
+    $candidates = @('python', 'python3')
     foreach ($c in $candidates) {
         $parts = $c -split '\s+'
         $cmd = $parts[0]
@@ -62,10 +71,10 @@ function Resolve-Python {
         if ($parts.Length -gt 1) { $args = $parts[1..($parts.Length-1)] }
         try {
             & $cmd @args --version *> $null
-            if ($LASTEXITCODE -eq 0) { return @($cmd) + $args }
+            if ($LASTEXITCODE -eq 0) { return @($cmd) }
         } catch {}
     }
-    throw 'Python not found. Install Python 3.8+ and ensure it is on PATH.'
+    throw 'Python not found. Ensure actions/setup-python ran or install Python 3.8+ on PATH.'
 }
 
 $py = Resolve-Python
