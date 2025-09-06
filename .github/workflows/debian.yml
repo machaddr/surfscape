@@ -29,7 +29,8 @@ jobs:
             devscripts debhelper dh-python \
             python3-all python3-venv python3-setuptools python3-pip \
             build-essential fakeroot \
-            portaudio19-dev libasound2-dev
+            portaudio19-dev libasound2-dev \
+            python3-pyqt6 python3-pyaudio python3-markdown python3-dev
 
       - name: Build Debian package
         shell: bash
