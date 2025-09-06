@@ -1040,11 +1040,11 @@ class AdvancedSettingsDialog(QDialog):
     def _create_data_panel(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
-        
+
         # History Management
         history_group = QGroupBox("Browsing History")
         history_layout = QVBoxLayout(history_group)
-        
+
         # History list with individual delete options
         self.history_list = QListWidget()
         try:
@@ -1054,63 +1054,84 @@ class AdvancedSettingsDialog(QDialog):
         self.history_list.setMaximumHeight(200)
         self._populate_history_list()
         history_layout.addWidget(self.history_list)
-        
+
         history_buttons = QHBoxLayout()
         delete_history_item_btn = QPushButton("Delete Selected")
         delete_history_item_btn.clicked.connect(self._delete_selected_history)
         history_buttons.addWidget(delete_history_item_btn)
-        
+
         clear_all_history_btn = QPushButton("Clear All History")
         clear_all_history_btn.clicked.connect(self._clear_history)
         history_buttons.addWidget(clear_all_history_btn)
-        
+
         history_layout.addLayout(history_buttons)
         layout.addWidget(history_group)
-        
+
+        # Bookmarks Management (placed below Browsing History)
+        bookmarks_group = QGroupBox("Bookmarks")
+        bookmarks_layout = QVBoxLayout(bookmarks_group)
+
+        self.bookmarks_list = QListWidget()
+        self.bookmarks_list.setMaximumHeight(200)
+        self._populate_bookmarks_list()
+        bookmarks_layout.addWidget(self.bookmarks_list)
+
+        bookmarks_buttons = QHBoxLayout()
+        delete_bookmark_item_btn = QPushButton("Delete Selected")
+        delete_bookmark_item_btn.clicked.connect(self._delete_selected_bookmarks)
+        bookmarks_buttons.addWidget(delete_bookmark_item_btn)
+
+        clear_all_bookmarks_btn = QPushButton("Clear All Bookmarks")
+        clear_all_bookmarks_btn.clicked.connect(self._clear_bookmarks)
+        bookmarks_buttons.addWidget(clear_all_bookmarks_btn)
+
+        bookmarks_layout.addLayout(bookmarks_buttons)
+        layout.addWidget(bookmarks_group)
+
         # Cookie Management
         cookies_group = QGroupBox("Cookies")
         cookies_layout = QVBoxLayout(cookies_group)
-        
+
         # Cookies list with individual delete options
         self.cookies_list = QListWidget()
         self.cookies_list.setMaximumHeight(200)
         self._populate_cookies_list()
         cookies_layout.addWidget(self.cookies_list)
-        
+
         cookies_buttons = QHBoxLayout()
         delete_cookie_item_btn = QPushButton("Delete Selected")
         delete_cookie_item_btn.clicked.connect(self._delete_selected_cookies)
         cookies_buttons.addWidget(delete_cookie_item_btn)
-        
+
         clear_all_cookies_btn = QPushButton("Clear All Cookies")
         clear_all_cookies_btn.clicked.connect(self._clear_cookies)
         cookies_buttons.addWidget(clear_all_cookies_btn)
-        
+
         cookies_layout.addLayout(cookies_buttons)
         layout.addWidget(cookies_group)
-        
+
         # Cache Management
         cache_group = QGroupBox("Cache")
         cache_layout = QVBoxLayout(cache_group)
-        
+
         clear_cache_btn = QPushButton("Clear Cache")
         clear_cache_btn.clicked.connect(self._clear_cache)
         cache_layout.addWidget(clear_cache_btn)
-        
+
         layout.addWidget(cache_group)
-        
+
         # Bulk Operations
         bulk_group = QGroupBox("Bulk Operations")
         bulk_layout = QVBoxLayout(bulk_group)
-        
+
         clear_all_btn = QPushButton("Clear All Data")
         clear_all_btn.clicked.connect(self._clear_all_data)
         clear_all_btn.setStyleSheet("QPushButton { background-color: #d32f2f; color: white; }")
         bulk_layout.addWidget(clear_all_btn)
-        
+
         layout.addWidget(bulk_group)
         layout.addStretch()
-        
+
         return panel
     
     def _create_import_export_panel(self):
@@ -1249,6 +1270,24 @@ class AdvancedSettingsDialog(QDialog):
                 except Exception:
                     pass
                 self.history_list.addItem(item)
+
+    def _populate_bookmarks_list(self):
+        """Populate the bookmarks list widget"""
+        if hasattr(self.parent_browser, 'bookmarks'):
+            self.bookmarks_list.clear()
+            # Show all bookmarks (up to a reasonable cap for UI snappiness)
+            for title, url in self.parent_browser.bookmarks[:500]:
+                item_text = f"{title} - {url}"
+                item = QListWidgetItem(item_text)
+                item.setData(Qt.ItemDataRole.UserRole, (title, url))
+                try:
+                    if hasattr(self.parent_browser, '_get_favicon_cached'):
+                        icon = self.parent_browser._get_favicon_cached(url)
+                        if icon:
+                            item.setIcon(icon)
+                except Exception:
+                    pass
+                self.bookmarks_list.addItem(item)
     
     def _populate_cookies_list(self):
         """Populate the cookies list widget"""
@@ -1285,6 +1324,49 @@ class AdvancedSettingsDialog(QDialog):
                 self.parent_browser.update_history_menu()
             
             QMessageBox.information(self, "Success", f"Deleted {len(selected_items)} history item(s).")
+    
+    def _delete_selected_bookmarks(self):
+        """Delete selected bookmarks"""
+        selected_items = self.bookmarks_list.selectedItems()
+        if not selected_items:
+            QMessageBox.information(self, "No Selection", "Please select bookmarks to delete.")
+            return
+        
+        reply = QMessageBox.question(self, "Delete Bookmarks", 
+                                   f"Are you sure you want to delete {len(selected_items)} bookmark(s)?",
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            for item in selected_items:
+                title, url = item.data(Qt.ItemDataRole.UserRole)
+                # Remove from browser bookmarks
+                if hasattr(self.parent_browser, 'bookmarks'):
+                    self.parent_browser.bookmarks = [b for b in self.parent_browser.bookmarks if not (b[0] == title and b[1] == url)]
+                # Remove from list
+                self.bookmarks_list.takeItem(self.bookmarks_list.row(item))
+            
+            # Save updated bookmarks
+            if hasattr(self.parent_browser, 'save_json') and hasattr(self.parent_browser, 'bookmarks_file'):
+                self.parent_browser.save_json(self.parent_browser.bookmarks_file, self.parent_browser.bookmarks)
+                self.parent_browser.update_bookmarks_menu()
+            
+            QMessageBox.information(self, "Success", f"Deleted {len(selected_items)} bookmark(s).")
+    
+    def _clear_bookmarks(self):
+        """Clear all bookmarks"""
+        if not hasattr(self.parent_browser, 'bookmarks'):
+            return
+        reply = QMessageBox.question(self, "Clear All Bookmarks", 
+                                   "Are you sure you want to clear all bookmarks?\n\nThis action cannot be undone.",
+                                   QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                                   QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            self.parent_browser.bookmarks = []
+            # Save and refresh UI
+            if hasattr(self.parent_browser, 'save_json') and hasattr(self.parent_browser, 'bookmarks_file'):
+                self.parent_browser.save_json(self.parent_browser.bookmarks_file, self.parent_browser.bookmarks)
+            self.parent_browser.update_bookmarks_menu()
+            self._populate_bookmarks_list()
+            QMessageBox.information(self, "Success", "All bookmarks have been cleared.")
     
     def _delete_selected_cookies(self):
         """Delete selected cookies"""
