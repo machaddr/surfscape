@@ -15,7 +15,7 @@
 #endif
 
 [Setup]
-AppId={{A1E9299E-1E90-4D34-9B92-8F7B5E0A9F9A}
+AppId={{A1E9299E-1E90-4D34-9B92-8F7B5E0A9F9A}}
 AppName=Surfscape
 AppVersion={#Version}
 AppPublisher=André Machado
