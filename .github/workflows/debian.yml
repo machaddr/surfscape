@@ -10,7 +10,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: debian:bookworm-slim
+      image: debian:trixie-slim
     steps:
       - name: Prepare base tools (git, ca-certificates)
         run: |
