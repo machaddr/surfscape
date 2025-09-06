@@ -1,9 +1,18 @@
 ; Inno Setup Script for Surfscape
 ; Assumes PyInstaller built app resides in DistDir (passed via /DDistDir) with executable surfscape.exe
 
-#define Version GetCmdParam('Version', '1.0')
-#define DistDir GetCmdParam('DistDir', '..\\dist\\surfscape')
-#define OutputDir GetCmdParam('OutputDir', 'Output')
+; Accept /DVersion, /DDistDir, /DOutputDir passed from ISCC; otherwise fall back to defaults
+#ifndef Version
+#define Version "1.0"
+#endif
+
+#ifndef DistDir
+#define DistDir "..\\dist\\surfscape"
+#endif
+
+#ifndef OutputDir
+#define OutputDir "Output"
+#endif
 
 [Setup]
 AppId={{A1E9299E-1E90-4D34-9B92-8F7B5E0A9F9A}

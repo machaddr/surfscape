@@ -22,7 +22,7 @@ function Clean-Windows {
     Write-Step "Removing Python build artifacts..."
     Try-Remove "build"
     Try-Remove "dist"
-    Get-ChildItem -Path . -Recurse -Include "*.spec", "*.egg-info", ".pybuild", "__pycache__" -ErrorAction SilentlyContinue |
+    Get-ChildItem -Path . -Recurse -Include "*.egg-info", ".pybuild", "__pycache__" -ErrorAction SilentlyContinue |
         ForEach-Object { Try-Remove $_.FullName }
     Get-ChildItem -Path . -Recurse -Include "*.pyc" -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
 
@@ -108,6 +108,15 @@ Write-Step "Bundling documentation"
 Copy-Item -Path "README.md" -Destination "dist/surfscape" -Force
 Copy-Item -Path "LICENSE" -Destination "dist/surfscape" -Force
 
+# Sanity check: ensure dist output exists
+if (-not (Test-Path "dist/surfscape/surfscape.exe")) {
+    if (-not (Test-Path "dist/surfscape")) {
+        throw "PyInstaller output folder not found at dist/surfscape. Build likely failed earlier."
+    } else {
+        throw "PyInstaller executable not found at dist/surfscape/surfscape.exe. Verify surfscape.spec name and build logs."
+    }
+}
+
 # Try to compile installer with Inno Setup (ISCC)
 Write-Header "Packaging installer (Inno Setup)"
 
@@ -125,14 +134,16 @@ function Find-ISCC {
 }
 
 $iscc = Find-ISCC
-$issPath = "installer/Surfscape.iss"
+$issPath = Resolve-Path "installer/Surfscape.iss"
 if (-not (Test-Path $issPath)) { throw "Missing installer/Surfscape.iss" }
 
 New-Item -ItemType Directory -Path "installer/Output" -Force | Out-Null
 
 if ($iscc) {
     Write-Step "Using ISCC at: $iscc"
-    & $iscc $issPath /DVersion=$version /DDistDir="$(Resolve-Path dist/surfscape)" /DOutputDir="$(Resolve-Path installer/Output)"
+    $distAbs = Resolve-Path "dist/surfscape"
+    $outAbs = Resolve-Path "installer/Output"
+    & $iscc "${issPath}" "/DVersion=$version" "/DDistDir=$distAbs" "/DOutputDir=$outAbs"
     if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed" }
     Write-Host "Installer created in installer/Output" -ForegroundColor Green
 } else {

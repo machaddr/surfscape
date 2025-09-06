@@ -18,8 +18,12 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install Inno Setup
-        uses: Minionguyjpro/Inno-Setup-Action@v1.2.4
+      - name: Install Inno Setup via Chocolatey
+        shell: pwsh
+        run: |
+          choco install innosetup --yes --no-progress
+          $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+          if (-not $iscc) { Write-Error 'ISCC.exe not found after install' }
 
       - name: Build Windows artifacts
         shell: pwsh
