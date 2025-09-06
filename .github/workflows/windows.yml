@@ -18,17 +18,35 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Install Inno Setup via Chocolatey
-        shell: pwsh
-        run: |
-          choco install innosetup --yes --no-progress
-          $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
-          if (-not $iscc) { Write-Error 'ISCC.exe not found after install' }
-
       - name: Build Windows artifacts
         shell: pwsh
         run: |
           ./build-windows.ps1
+
+      - name: Extract version for installer
+        id: version
+        shell: pwsh
+        run: |
+          $v = '1.0'
+          try {
+            $m = Select-String -Path setup.py -Pattern 'version="([0-9]+\.[0-9]+\.[0-9]+)"' -AllMatches
+            if ($m -and $m.Matches.Count -gt 0) { $v = $m.Matches[0].Groups[1].Value }
+          } catch {}
+          "SURFSCAPE_VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prepare installer output dir
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path "installer/Output" | Out-Null
+
+      - name: Compile installer (Inno Setup)
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.4
+        with:
+          path: installer/Surfscape.iss
+          options: >-
+            /DVersion=${{ env.SURFSCAPE_VERSION }}
+            /DDistDir=${{ github.workspace }}\dist\surfscape
+            /DOutputDir=${{ github.workspace }}\installer\Output
 
       - name: Upload portable zip
         uses: actions/upload-artifact@v4
