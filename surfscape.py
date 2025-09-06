@@ -3660,8 +3660,82 @@ class Browser(QMainWindow):
         """Update the History menu with a scrollable list of entries."""
         self.history_menu.clear()
         try:
-            from PyQt6.QtWidgets import QListWidget, QWidgetAction, QListWidgetItem
-            from PyQt6.QtCore import Qt
+            from PyQt6.QtWidgets import QListWidget, QWidgetAction, QListWidgetItem, QLineEdit, QCompleter
+            from PyQt6.QtCore import Qt, QStringListModel
+            # Search field with live completer (above the list)
+            hist_suggestions = []
+            for title, url in reversed(self.history[-200:]):
+                display = f"{title} — {url}" if title else url
+                hist_suggestions.append(display)
+
+            hist_model = QStringListModel(hist_suggestions)
+
+            search_line = QLineEdit()
+            search_line.setPlaceholderText("Search history…")
+            try:
+                search_line.setClearButtonEnabled(True)
+            except Exception:
+                pass
+
+            extract = self._extract_url_from_completion_text
+            class HistCompleter(QCompleter):
+                def pathFromIndex(self_inner, index):
+                    try:
+                        text = index.data()
+                    except Exception:
+                        return super().pathFromIndex(index)
+                    return extract(str(text))
+
+            completer = HistCompleter(hist_model, self)
+            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            try:
+                completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            except Exception:
+                pass
+            completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+
+            def navigate_from_text(display_text: str):
+                url = extract(display_text or "")
+                if url:
+                    self.tabs.currentWidget().setUrl(QUrl(url))
+                    self.history_menu.hide()
+
+            completer.activated[str].connect(navigate_from_text)
+            search_line.setCompleter(completer)
+
+            def on_return_pressed():
+                typed = search_line.text().strip()
+                if not typed:
+                    return
+                items = hist_model.stringList()
+                lower = typed.lower()
+                best = None
+                # Exact display match first
+                for s in items:
+                    if s.lower() == lower:
+                        best = s
+                        break
+                if best is None:
+                    # First contains match
+                    for s in items:
+                        if lower in s.lower():
+                            best = s
+                            break
+                if best is None:
+                    # Last resort: typed equals a URL in history
+                    for title, url in reversed(self.history[-200:]):
+                        if typed.lower() == (url or "").lower():
+                            best = url
+                            break
+                if best:
+                    navigate_from_text(best)
+
+            search_line.returnPressed.connect(on_return_pressed)
+
+            search_action = QWidgetAction(self.history_menu)
+            search_action.setDefaultWidget(search_line)
+            self.history_menu.addAction(search_action)
+
             # Create list widget
             history_list = QListWidget()
             history_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
@@ -3704,12 +3778,94 @@ class Browser(QMainWindow):
             self.bookmarks_menu.addAction(self.action_import_bookmarks)
         if hasattr(self, 'action_export_bookmarks'):
             self.bookmarks_menu.addAction(self.action_export_bookmarks)
+        # Inline bookmarks search (below Export Bookmarks)
+        try:
+            from PyQt6.QtWidgets import QLineEdit, QWidgetAction
+            from PyQt6.QtCore import QStringListModel, Qt
+            from PyQt6.QtWidgets import QCompleter
+
+            # Build suggestions from bookmarks only
+            bm_suggestions: list[str] = []
+            for title, url in self.bookmarks:
+                display = f"{title} — {url}" if title else url
+                bm_suggestions.append(display)
+
+            bm_model = QStringListModel(bm_suggestions)
+
+            search_line = QLineEdit()
+            search_line.setPlaceholderText("Search bookmarks…")
+            try:
+                search_line.setClearButtonEnabled(True)
+            except Exception:
+                pass
+
+            class BmCompleter(QCompleter):
+                # Insert only the URL in the line edit when navigating via Enter
+                def pathFromIndex(self_inner, index):
+                    try:
+                        text = index.data()
+                    except Exception:
+                        return super().pathFromIndex(index)
+                    return self._extract_url_from_completion_text(str(text))
+
+            completer = BmCompleter(bm_model, self)
+            completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            try:
+                completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            except Exception:
+                pass
+            completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+
+            def navigate_from_text(display_text: str):
+                url = self._extract_url_from_completion_text(display_text or "")
+                if url:
+                    self.tabs.currentWidget().setUrl(QUrl(url))
+                    self.bookmarks_menu.hide()
+
+            completer.activated[str].connect(navigate_from_text)
+            search_line.setCompleter(completer)
+
+            # Enter key: pick first matching suggestion (contains), if any
+            def on_return_pressed():
+                typed = search_line.text().strip()
+                if not typed:
+                    return
+                # Prefer exact (case-insensitive) Display match
+                items = bm_model.stringList()
+                lower = typed.lower()
+                best = None
+                for s in items:
+                    if s.lower() == lower:
+                        best = s
+                        break
+                if best is None:
+                    # Fallback to first contains match
+                    for s in items:
+                        if lower in s.lower():
+                            best = s
+                            break
+                if best is None:
+                    # As a last resort, if the typed text equals a URL of a bookmark
+                    for title, url in self.bookmarks:
+                        if typed.lower() == (url or "").lower():
+                            best = url
+                            break
+                if best:
+                    navigate_from_text(best)
+
+            search_line.returnPressed.connect(on_return_pressed)
+
+            search_action = QWidgetAction(self.bookmarks_menu)
+            search_action.setDefaultWidget(search_line)
+            self.bookmarks_menu.addAction(search_action)
+        except Exception:
+            # If anything goes wrong, continue without the search field
+            pass
+
         self.bookmarks_menu.addSeparator()
 
         # Build a scrollable bookmarks list inside the menu
         try:
-            from PyQt6.QtWidgets import QListWidget, QWidgetAction, QListWidgetItem
-            from PyQt6.QtCore import Qt
             # Create list widget
             bookmarks_list = QListWidget()
             bookmarks_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
