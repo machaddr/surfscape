@@ -1,0 +1,41 @@
+name: build-windows
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Inno Setup
+        uses: Minionguyjpro/Inno-Setup-Action@v1.2.4
+
+      - name: Build Windows artifacts
+        shell: pwsh
+        run: |
+          ./build-windows.ps1
+
+      - name: Upload portable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: surfscape-windows-portable
+          path: surfscape-windows-portable.zip
+          if-no-files-found: warn
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: surfscape-windows-installer
+          path: installer/Output/*.exe
+          if-no-files-found: warn
