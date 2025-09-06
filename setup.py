@@ -15,7 +15,7 @@ def read_requirements():
 
 setup(
     name="surfscape",
-    version="1.0.0",
+    version="1.0",
     author="André Machado",
     author_email="machaddr@falanet.org",
     description="Your Own Way to Navigate the Web with Freedom",
