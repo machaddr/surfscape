@@ -74,8 +74,8 @@ Write-Step ("Using Python command: " + ($py -join ' '))
 # Clean previous builds
 Clean-Windows
 
-# Determine version from setup.py (fallback to 1.0.0)
-$version = '1.0.0'
+# Determine version from setup.py (fallback to 1.0)
+$version = '1.0'
 try {
     $setup = Get-Content -Raw -Path "setup.py"
     if ($setup -match "version=\"([0-9]+\.[0-9]+\.[0-9]+)\"") { $version = $Matches[1] }
