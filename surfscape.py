@@ -4,7 +4,7 @@ import os, sys, json, asyncio, aiohttp, re, pyaudio, speech_recognition as sr, a
 from PyQt6.QtCore import QUrl, Qt , QDateTime, QThread, pyqtSignal, QObject, QStandardPaths, QTimer, QSize
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog, QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QCheckBox, QSpinBox, QComboBox, QSlider, QGroupBox, QGridLayout, QScrollArea, QTextEdit, QFrame, QWidget, QSplitter
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
-from PyQt6.QtGui import QIcon, QPixmap, QAction, QKeySequence, QShortcut, QColor, QFont, QStandardItemModel, QStandardItem
+from PyQt6.QtGui import QIcon, QPixmap, QAction, QKeySequence, QShortcut, QColor, QFont, QStandardItemModel, QStandardItem, QImage, QImageWriter
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtNetwork import QNetworkCookie, QNetworkProxy, QNetworkAccessManager, QNetworkRequest
 from PyQt6.QtWebEngineCore import QWebEngineUrlRequestInterceptor, QWebEngineProfile, QWebEngineSettings
@@ -2658,6 +2658,9 @@ class DevToolsDialog(QDialog):
             self.performance_widget.append(f"→ Error displaying results: {str(e)}")
     
     def log_to_console(self, message, message_type="log"):
+        # Filter noisy site policy warnings
+        if isinstance(message, str) and 'Permissions-Policy' in message and 'interest-cohort' in message:
+            return
         timestamp = QDateTime.currentDateTime().toString("hh:mm:ss.zzz")
         
         # Color coding based on message type
@@ -3409,8 +3412,20 @@ class Browser(QMainWindow):
         if os.path.exists(path):
             try:
                 pm = QPixmap(path)
-                if not pm.isNull():
-                    return QIcon(pm)
+                if pm.isNull():
+                    return None
+                # Recreate QImage to ensure it's sane, then repack as PNG if needed
+                img = pm.toImage()
+                if img.isNull():
+                    return None
+                # If the file might be problematic, re-encode once
+                try:
+                    writer = QImageWriter(path, b"png")
+                    writer.setQuality(100)
+                    writer.write(img)
+                except Exception:
+                    pass
+                return QIcon(QPixmap.fromImage(img))
             except Exception:
                 return None
         return None
@@ -3481,6 +3496,9 @@ class Browser(QMainWindow):
                             ctype = str(reply.header(QNetworkRequest.KnownHeaders.ContentTypeHeader) or "")
                         except Exception:
                             ctype = ""
+                        # Skip SVGs and non-images; QImage won't handle SVG without extra module
+                        if ctype and ("svg" in ctype.lower()):
+                            return
                         if ctype and not ("image/" in ctype or "x-icon" in ctype or "vnd.microsoft.icon" in ctype):
                             # Not an image; let finally advance to next
                             return
@@ -3496,19 +3514,24 @@ class Browser(QMainWindow):
                         if len(data) > 1024 * 1024:
                             # Too large; let finally advance to next
                             return
-                        pm = QPixmap()
-                        pm.loadFromData(bytes(data))
-                        if pm.isNull():
+                        # Decode using QImage to sanitize metadata
+                        img = QImage()
+                        img.loadFromData(bytes(data))
+                        if img.isNull():
                             # Invalid image; let finally advance to next
                             return
-                        # Save to disk
+                        # Normalize size to 16x16 for consistent UI and to avoid very large icons
+                        if img.width() > 0 and img.height() > 0:
+                            img = img.scaled(16, 16, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                        # Save to disk as clean PNG (re-encoded) to avoid libpng warnings
                         path = self._favicon_path_for_key(key)
                         try:
-                            with open(path, 'wb') as f:
-                                f.write(bytes(data))
+                            writer = QImageWriter(path, b"png")
+                            writer.setQuality(100)
+                            writer.write(img)
                         except Exception:
                             pass
-                        icon = QIcon(pm)
+                        icon = QIcon(QPixmap.fromImage(img))
                         self._favicon_cache[key] = icon
                         for cb in self._favicon_pending.pop(key, []):
                             try:
