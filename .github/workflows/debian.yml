@@ -1,0 +1,58 @@
+name: build-debian
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm-slim
+    steps:
+      - name: Prepare base tools (git, ca-certificates)
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends git ca-certificates
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Debian build tools
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            devscripts debhelper dh-python \
+            python3-all python3-venv python3-setuptools python3-pip \
+            build-essential fakeroot \
+            portaudio19-dev libasound2-dev
+
+      - name: Build Debian package
+        shell: bash
+        run: |
+          chmod +x ./build-deb.sh
+          ./build-deb.sh
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          set -e
+          mkdir -p artifacts
+          shopt -s nullglob
+          cp -v ../surfscape_*.deb artifacts/ || true
+          cp -v ../surfscape_*.changes artifacts/ || true
+          cp -v ../surfscape_*.buildinfo artifacts/ || true
+          cp -v ../surfscape_*.dsc artifacts/ || true
+          cp -v ../surfscape_*.tar.* artifacts/ || true
+          ls -la artifacts || true
+
+      - name: Upload Debian artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: surfscape-debian-artifacts
+          path: artifacts/
+          if-no-files-found: warn
