@@ -14,6 +14,11 @@
 #define OutputDir "Output"
 #endif
 
+; Optional: separate version used in the output filename (should avoid dots)
+#ifndef FilenameVersion
+#define FilenameVersion Version
+#endif
+
 [Setup]
 AppId={{A1E9299E-1E90-4D34-9B92-8F7B5E0A9F9A}}
 AppName=Surfscape
@@ -26,7 +31,7 @@ DefaultDirName={pf64}\\Surfscape
 DefaultGroupName=Surfscape
 AllowNoIcons=yes
 OutputDir={#OutputDir}
-OutputBaseFilename=Surfscape-setup-{#Version}
+OutputBaseFilename=Surfscape-setup-{#FilenameVersion}
 Compression=lzma
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64
