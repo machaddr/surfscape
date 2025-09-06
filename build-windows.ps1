@@ -112,17 +112,31 @@ Write-Step "Verifying PyInstaller availability"
 Write-Header "Building standalone executable with PyInstaller"
 & $venvPython -m PyInstaller --noconfirm surfscape.spec
 
+# Normalize output layout to dist/surfscape (supports onefile or onedir)
+$distRoot = "dist"
+$targetDir = Join-Path $distRoot "surfscape"
+$onefileExe = Join-Path $distRoot "surfscape.exe"
+$folderExe = Join-Path $targetDir "surfscape.exe"
+
+# Ensure target folder exists
+if (-not (Test-Path $targetDir)) { New-Item -ItemType Directory -Path $targetDir -Force | Out-Null }
+
+# If PyInstaller produced a onefile EXE in dist/, move it into dist/surfscape/
+if (Test-Path $onefileExe) {
+    Move-Item -Path $onefileExe -Destination $folderExe -Force
+}
+
 # Bundle docs and license with the app folder
 Write-Step "Bundling documentation"
-Copy-Item -Path "README.md" -Destination "dist/surfscape" -Force
-Copy-Item -Path "LICENSE" -Destination "dist/surfscape" -Force
+Copy-Item -Path "README.md" -Destination $targetDir -Force
+Copy-Item -Path "LICENSE" -Destination $targetDir -Force
 
 # Sanity check: ensure dist output exists
-if (-not (Test-Path "dist/surfscape/surfscape.exe")) {
-    if (-not (Test-Path "dist/surfscape")) {
-        throw "PyInstaller output folder not found at dist/surfscape. Build likely failed earlier."
+if (-not (Test-Path $folderExe)) {
+    if (-not (Test-Path $targetDir)) {
+        throw "PyInstaller output folder not found at $targetDir. Build likely failed earlier."
     } else {
-        throw "PyInstaller executable not found at dist/surfscape/surfscape.exe. Verify surfscape.spec name and build logs."
+        throw "PyInstaller executable not found at $folderExe. Verify surfscape.spec name and build logs."
     }
 }
 
