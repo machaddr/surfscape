@@ -1057,37 +1057,47 @@ class AdvancedSettingsDialog(QDialog):
     def _create_import_export_panel(self):
         panel = QWidget()
         layout = QVBoxLayout(panel)
-        
+
         # Import/Export
         group = QGroupBox("Backup & Restore")
         group_layout = QVBoxLayout(group)
-        
         export_settings_btn = QPushButton("Export Settings")
         export_settings_btn.clicked.connect(self._export_settings)
         group_layout.addWidget(export_settings_btn)
-        
+
         import_settings_btn = QPushButton("Import Settings")
         import_settings_btn.clicked.connect(self._import_settings)
         group_layout.addWidget(import_settings_btn)
-        
+
         group_layout.addWidget(QLabel("Export/import all browser settings to/from a file."))
-        
         layout.addWidget(group)
-        
+
+        # Bookmarks Import/Export
+        bookmarks_group = QGroupBox("Bookmarks")
+        bookmarks_layout = QVBoxLayout(bookmarks_group)
+        export_bookmarks_btn = QPushButton("Export Bookmarks…")
+        export_bookmarks_btn.clicked.connect(lambda: self.parent_browser.export_bookmarks() if self.parent_browser else None)
+        bookmarks_layout.addWidget(export_bookmarks_btn)
+        import_bookmarks_btn = QPushButton("Import Bookmarks…")
+        import_bookmarks_btn.clicked.connect(lambda: self.parent_browser.import_bookmarks() if self.parent_browser else None)
+        bookmarks_layout.addWidget(import_bookmarks_btn)
+        bookmarks_layout.addWidget(QLabel("Backup or restore your bookmarks in JSON or HTML format."))
+        layout.addWidget(bookmarks_group)
+
         # Reset
         group = QGroupBox("Reset")
         group_layout = QVBoxLayout(group)
-        
+
         reset_btn = QPushButton("Reset All Settings to Default")
         reset_btn.clicked.connect(self._reset_to_defaults)
         reset_btn.setStyleSheet("QPushButton { background-color: #d32f2f; color: white; }")
         group_layout.addWidget(reset_btn)
-        
+
         group_layout.addWidget(QLabel("This will reset all settings to their default values."))
-        
+
         layout.addWidget(group)
         layout.addStretch()
-        
+
         return panel
     
     def _on_category_changed(self, current, previous):
@@ -3151,6 +3161,8 @@ class Browser(QMainWindow):
         self.update_history_menu()
         self.update_bookmarks_menu()
         self.update_cookies_menu()  # Update cookies menu
+        # Initialize URL bar autocomplete from history and bookmarks
+        self.update_url_autocomplete()
         
         # Performance: Defer cookie loading until tabs are created
         QTimer.singleShot(300, self.load_cookies_to_web_engine)
@@ -3389,6 +3401,13 @@ class Browser(QMainWindow):
 
         # Bookmarks menu
         self.bookmarks_menu = menu_bar.addMenu("Bookmarks")
+            
+        # Static actions for import/export
+        self.action_import_bookmarks = QAction("Import Bookmarks...", self)
+        self.action_import_bookmarks.triggered.connect(self.import_bookmarks)
+        self.action_export_bookmarks = QAction("Export Bookmarks...", self)
+        self.action_export_bookmarks.triggered.connect(self.export_bookmarks)
+        # Build initial bookmarks UI
         self.update_bookmarks_menu()
 
         # Cookies menu
@@ -3522,25 +3541,22 @@ class Browser(QMainWindow):
     def toggle_bookmark(self):
         url = self.url_bar.text()
         if url in [bookmark[1] for bookmark in self.bookmarks]:
+            # Remove existing bookmark
             self.bookmarks = [bookmark for bookmark in self.bookmarks if bookmark[1] != url]
-            for action in self.bookmarks_menu.actions():
-                if action.data() == url:
-                    self.bookmarks_menu.removeAction(action)
             self.bookmark_button.setIconText("☆")  # Set to unpressed state
         else:
+            # Add new bookmark
             current_widget = self.tabs.currentWidget()
             if current_widget is not None and current_widget.page() is not None:
                 title = current_widget.page().title()
                 self.bookmarks.append([title, url])
-                bookmark_action = QAction(title, self)
-                bookmark_action.setData(url)
-                bookmark_action.triggered.connect(lambda _, url=url: self.tabs.currentWidget().setUrl(QUrl(url)))
-                self.bookmarks_menu.addAction(bookmark_action)
             self.bookmark_button.setIconText("★")  # Change to pressed state
         self.save_json(self.bookmarks_file, self.bookmarks)  # Save bookmarks
 
         # Reset the bookmark button state when the URL changes
         self.url_bar.textChanged.connect(self.reset_bookmark_button)
+        # Refresh menu UI
+        self.update_bookmarks_menu()
 
     def reset_bookmark_button(self):
         url = self.url_bar.text()
@@ -3641,27 +3657,299 @@ class Browser(QMainWindow):
             self.save_json(self.history_file, self.history)  # Save history
 
     def update_history_menu(self):
-        """ Update the History menu with the latest entries """
+        """Update the History menu with a scrollable list of entries."""
         self.history_menu.clear()
-        for title, url in reversed(self.history[-50:]):  # Limit to the last 50 entries
-            history_action = QAction(title, self)
-            history_action.triggered.connect(lambda _, url=url: self.tabs.currentWidget().setUrl(QUrl(url)))
-            self.history_menu.addAction(history_action)
+        try:
+            from PyQt6.QtWidgets import QListWidget, QWidgetAction, QListWidgetItem
+            from PyQt6.QtCore import Qt
+            # Create list widget
+            history_list = QListWidget()
+            history_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+            history_list.setMinimumWidth(420)
+            history_list.setMaximumHeight(300)
+
+            # Populate items (most recent first)
+            for title, url in reversed(self.history[-200:]):
+                item_text = f"{title} — {url}" if title else url
+                item = QListWidgetItem(item_text)
+                item.setData(Qt.ItemDataRole.UserRole, url)
+                history_list.addItem(item)
+
+            def on_item_clicked(item):
+                url = item.data(Qt.ItemDataRole.UserRole)
+                if url:
+                    self.tabs.currentWidget().setUrl(QUrl(url))
+                    self.history_menu.hide()
+
+            history_list.itemClicked.connect(on_item_clicked)
+
+            list_action = QWidgetAction(self.history_menu)
+            list_action.setDefaultWidget(history_list)
+            self.history_menu.addAction(list_action)
+        except Exception:
+                # Fallback to basic actions
+                for title, url in reversed(self.history[-50:]):
+                    history_action = QAction(title or url, self)
+                    history_action.triggered.connect(lambda _, url=url: self.tabs.currentWidget().setUrl(QUrl(url)))
+                    self.history_menu.addAction(history_action)
+        # Keep URL bar autocomplete fresh
+        self.update_url_autocomplete()
 
     def update_bookmarks_menu(self):
-        """ Update the Bookmarks menu with the loaded bookmarks """
+        """Update the Bookmarks menu with a scrollable list of bookmarks."""
+        # Clear and rebuild menu content
         self.bookmarks_menu.clear()
+        # Static actions
+        if hasattr(self, 'action_import_bookmarks'):
+            self.bookmarks_menu.addAction(self.action_import_bookmarks)
+        if hasattr(self, 'action_export_bookmarks'):
+            self.bookmarks_menu.addAction(self.action_export_bookmarks)
+        self.bookmarks_menu.addSeparator()
+
+        # Build a scrollable bookmarks list inside the menu
+        try:
+            from PyQt6.QtWidgets import QListWidget, QWidgetAction, QListWidgetItem
+            from PyQt6.QtCore import Qt
+            # Create list widget
+            bookmarks_list = QListWidget()
+            bookmarks_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+            bookmarks_list.setMinimumWidth(420)
+            bookmarks_list.setMaximumHeight(300)
+
+            # Populate items
+            for title, url in self.bookmarks:
+                item_text = f"{title} — {url}" if title else url
+                item = QListWidgetItem(item_text)
+                item.setData(Qt.ItemDataRole.UserRole, url)
+                bookmarks_list.addItem(item)
+
+            def on_item_clicked(item):
+                url = item.data(Qt.ItemDataRole.UserRole)
+                if url:
+                    self.tabs.currentWidget().setUrl(QUrl(url))
+                    # Close the menu after selection
+                    self.bookmarks_menu.hide()
+
+            bookmarks_list.itemClicked.connect(on_item_clicked)
+
+            list_action = QWidgetAction(self.bookmarks_menu)
+            list_action.setDefaultWidget(bookmarks_list)
+            self.bookmarks_menu.addAction(list_action)
+        except Exception as e:
+                # Fallback to simple actions if anything goes wrong
+                for title, url in self.bookmarks:
+                    bookmark_action = QAction(title or url, self)
+                    bookmark_action.triggered.connect(lambda _, url=url: self.tabs.currentWidget().setUrl(QUrl(url)))
+                    self.bookmarks_menu.addAction(bookmark_action)
+        # Keep URL bar autocomplete fresh
+        self.update_url_autocomplete()
+
+    def export_bookmarks(self):
+        """Export bookmarks to JSON or HTML (Netscape format)."""
+        try:
+            default_path = os.path.join(self.data_dir, "bookmarks.json")
+            file_path, selected_filter = QFileDialog.getSaveFileName(
+                self,
+                "Export Bookmarks",
+                default_path,
+                "JSON Files (*.json);;HTML Bookmarks (*.html)"
+            )
+            if not file_path:
+                return
+
+            if file_path.lower().endswith('.html') or (selected_filter and 'HTML' in selected_filter):
+                html = self._export_bookmarks_as_html()
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write(html)
+            else:
+                # Default to JSON
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(self.bookmarks, f, indent=2, ensure_ascii=False)
+            QMessageBox.information(self, "Export Bookmarks", f"Exported {len(self.bookmarks)} bookmarks.")
+        except Exception as e:
+            QMessageBox.warning(self, "Export Bookmarks", f"Failed to export bookmarks: {e}")
+
+    def import_bookmarks(self):
+        """Import bookmarks from JSON or HTML (Netscape format)."""
+        try:
+            file_path, selected_filter = QFileDialog.getOpenFileName(
+                self,
+                "Import Bookmarks",
+                "",
+                "JSON Files (*.json);;HTML Bookmarks (*.html)"
+            )
+            if not file_path:
+                return
+
+            imported = []
+            if file_path.lower().endswith('.html') or (selected_filter and 'HTML' in selected_filter):
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    html_text = f.read()
+                imported = self._parse_netscape_bookmarks(html_text)
+            else:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                # Expect list of [title, url]
+                if isinstance(data, list):
+                    for item in data:
+                        if isinstance(item, (list, tuple)) and len(item) >= 2:
+                            imported.append([str(item[0]), str(item[1])])
+
+            if not imported:
+                QMessageBox.information(self, "Import Bookmarks", "No bookmarks found to import.")
+                return
+
+            existing_urls = {u for _, u in self.bookmarks}
+            added = 0
+            for title, url in imported:
+                if url and url not in existing_urls:
+                    self.bookmarks.append([title or url, url])
+                    existing_urls.add(url)
+                    added += 1
+
+            if added:
+                self.save_json(self.bookmarks_file, self.bookmarks)
+                self.update_bookmarks_menu()
+            QMessageBox.information(self, "Import Bookmarks", f"Imported {added} new bookmark(s).")
+        except Exception as e:
+            QMessageBox.warning(self, "Import Bookmarks", f"Failed to import bookmarks: {e}")
+
+    def _export_bookmarks_as_html(self) -> str:
+        """Create a simple Netscape-style bookmarks HTML string."""
+        from datetime import datetime
+        lines = [
+            "<!DOCTYPE NETSCAPE-Bookmark-file-1>",
+            "<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">",
+            f"<!-- This file was generated by Surfscape on {datetime.now().isoformat()} -->",
+            "<TITLE>Bookmarks</TITLE>",
+            "<H1>Bookmarks</H1>",
+            "<DL><p>"
+        ]
         for title, url in self.bookmarks:
-            bookmark_action = QAction(title, self)
-            bookmark_action.triggered.connect(lambda _, url=url: self.tabs.currentWidget().setUrl(QUrl(url)))
-            self.bookmarks_menu.addAction(bookmark_action)
+            safe_title = (title or url).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            safe_url = (url or '').replace('"', '&quot;')
+            lines.append(f"    <DT><A HREF=\"{safe_url}\">{safe_title}</A>")
+        lines.append("</DL><p>")
+        return "\n".join(lines)
+
+    def _parse_netscape_bookmarks(self, html_text: str):
+        """Parse a minimal Netscape-style bookmarks HTML and return list of [title, url]."""
+        import re
+        results = []
+        # Capture href and inner text of anchor tags
+        for href, text in re.findall(r'<a[^>]*href=\"([^\"]+)\"[^>]*>(.*?)</a>', html_text, flags=re.IGNORECASE|re.DOTALL):
+            # Strip any nested HTML tags from title
+            clean_text = re.sub(r'<[^>]+>', '', text).strip()
+            results.append([clean_text or href, href.strip()])
+        return results
 
     def update_cookies_menu(self):
-        """ Update the Cookies menu with the loaded cookies """
+        """Update the Cookies menu with a scrollable list of cookies."""
         self.cookies_menu.clear()
-        for cookie in self.cookies:
-            cookie_action = QAction(f"{cookie['name']} - {cookie['domain']}", self)
-            self.cookies_menu.addAction(cookie_action)
+        try:
+            from PyQt6.QtWidgets import QListWidget, QWidgetAction, QListWidgetItem
+            # Build scrollable list
+            cookies_list = QListWidget()
+            cookies_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
+            cookies_list.setMinimumWidth(420)
+            cookies_list.setMaximumHeight(300)
+
+            for cookie in self.cookies:
+                name = cookie.get('name', '')
+                domain = cookie.get('domain', '')
+                item_text = f"{name} — {domain}" if name or domain else "(cookie)"
+                item = QListWidgetItem(item_text)
+                cookies_list.addItem(item)
+
+            list_action = QWidgetAction(self.cookies_menu)
+            list_action.setDefaultWidget(cookies_list)
+            self.cookies_menu.addAction(list_action)
+        except Exception:
+            # Fallback to simple actions
+            for cookie in self.cookies:
+                name = cookie.get('name', '')
+                domain = cookie.get('domain', '')
+                cookie_action = QAction(f"{name} - {domain}", self)
+                self.cookies_menu.addAction(cookie_action)
+
+    def update_url_autocomplete(self):
+        """Build and apply URL bar autocomplete from history and bookmarks, labeled by source."""
+        try:
+            from PyQt6.QtCore import Qt, QStringListModel
+            from PyQt6.QtWidgets import QCompleter
+        except Exception:
+            return
+
+        # Build labeled suggestions, preferring bookmarks over history, de-duped by URL
+        suggestions: list[str] = []
+        added_urls: set[str] = set()
+
+        def add_entry(title: str, url: str, source: str):
+            if not url or url in added_urls:
+                return
+            base = f"{title} — {url}" if title else url
+            suggestions.append(f"{base} ({source})")
+            added_urls.add(url)
+
+        # Add bookmarks first (in stored order)
+        for title, url in self.bookmarks:
+            add_entry(title, url, "Bookmarks")
+        # Then add recent history (most recent first), skipping URLs already added
+        for title, url in reversed(self.history[-500:]):
+            add_entry(title, url, "History")
+
+        if not hasattr(self, '_url_completer_model'):
+            self._url_completer_model = QStringListModel(suggestions)
+        else:
+            self._url_completer_model.setStringList(suggestions)
+
+        if not hasattr(self, '_url_completer'):
+            # Custom completer that inserts only the URL into the line edit
+            extract = self._extract_url_from_completion_text
+            class UrlOnlyCompleter(QCompleter):
+                def pathFromIndex(self_inner, index):
+                    try:
+                        text = index.data()
+                    except Exception:
+                        return super().pathFromIndex(index)
+                    return extract(str(text))
+
+            self._url_completer = UrlOnlyCompleter(self._url_completer_model, self)
+            self._url_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+            # Match anywhere in the string for convenience
+            try:
+                self._url_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+            except Exception:
+                pass
+            self._url_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+            # Navigate on completion activation
+            self._url_completer.activated[str].connect(self._on_url_completion_activated)
+            self.url_bar.setCompleter(self._url_completer)
+
+    def _on_url_completion_activated(self, text: str):
+        """When a completion is chosen, extract URL and navigate."""
+        url = self._extract_url_from_completion_text(text)
+        self.url_bar.setText(url)
+        self.navigate_to_url()
+
+    def _extract_url_from_completion_text(self, text: str) -> str:
+        """Extract the pure URL from an autocomplete display string."""
+        url = text or ""
+        # Prefer splitting on the em dash we use for display
+        if ' — ' in url:
+            parts = url.rsplit(' — ', 1)
+            if len(parts) == 2:
+                url = parts[1]
+        elif ' - ' in url:
+            parts = url.rsplit(' - ', 1)
+            if len(parts) == 2:
+                url = parts[1]
+        # Strip label suffixes like " (Bookmarks)" or " (History)"
+        for suffix in (" (Bookmarks)", " (History)"):
+            if url.endswith(suffix):
+                url = url[: -len(suffix)]
+                break
+        return url.strip()
 
     def add_cookie(self, cookie):
         """ Add a cookie to the list and save it """
