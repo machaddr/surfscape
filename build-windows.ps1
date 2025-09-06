@@ -78,7 +78,7 @@ Clean-Windows
 $version = '1.0'
 try {
     $setup = Get-Content -Raw -Path "setup.py"
-    if ($setup -match "version=\"([0-9]+\.[0-9]+\.[0-9]+)\"") { $version = $Matches[1] }
+    if ($setup -match 'version="([0-9]+\.[0-9]+\.[0-9]+)"') { $version = $Matches[1] }
 } catch {}
 Write-Step "Project version: $version"
 
