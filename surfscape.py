@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 
 import os, sys, json, asyncio, aiohttp, re, pyaudio, speech_recognition as sr, anthropic, markdown
-from PyQt6.QtCore import QUrl, Qt , QDateTime, QThread, pyqtSignal, QObject, QStandardPaths, QTimer
+from PyQt6.QtCore import QUrl, Qt , QDateTime, QThread, pyqtSignal, QObject, QStandardPaths, QTimer, QSize
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog, QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QCheckBox, QSpinBox, QComboBox, QSlider, QGroupBox, QGridLayout, QScrollArea, QTextEdit, QFrame, QWidget, QSplitter
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
-from PyQt6.QtGui import QIcon, QPixmap, QAction, QKeySequence, QShortcut, QColor, QFont
+from PyQt6.QtGui import QIcon, QPixmap, QAction, QKeySequence, QShortcut, QColor, QFont, QStandardItemModel, QStandardItem
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtNetwork import QNetworkCookie, QNetworkProxy
+from PyQt6.QtNetwork import QNetworkCookie, QNetworkProxy, QNetworkAccessManager, QNetworkRequest
 from PyQt6.QtWebEngineCore import QWebEngineUrlRequestInterceptor, QWebEngineProfile, QWebEngineSettings
 from adblockparser import AdblockRules
 
@@ -306,6 +306,61 @@ class SettingsManager:
                 else:
                     default[key] = value
         merge_dict(self._settings, loaded_settings)
+         
+    def reset_to_defaults(self):
+        self._settings = self._load_default_settings()
+        self.save_settings()
+    
+    def export_settings(self, filepath):
+        try:
+            with open(filepath, 'w') as f:
+                json.dump(self._settings, f, indent=4)
+            return True
+        except Exception as e:
+            print(f"Failed to export settings: {e}")
+            return False
+    
+    def import_settings(self, filepath):
+        try:
+            with open(filepath, 'r') as f:
+                imported_settings = json.load(f)
+                self._merge_settings(imported_settings)
+                self.save_settings()
+            return True
+        except Exception as e:
+            print(f"Failed to import settings: {e}")
+            return False
+
+class AdvancedSettingsDialog(QDialog):
+    def __init__(self, settings_manager, parent=None):
+        super().__init__(parent)
+        self.settings_manager = settings_manager
+        self.parent_browser = parent
+        self.setWindowTitle("Surfscape Settings")
+        self.setMinimumSize(800, 600)
+        self.resize(1000, 700)
+        
+        # Create main layout (don't set on dialog yet)
+        main_layout = QHBoxLayout()
+        
+        # Create sidebar for categories
+        self.sidebar = QListWidget()
+        self.sidebar.setMaximumWidth(200)
+        self.sidebar.setStyleSheet("""
+            QListWidget {
+                background-color: #f0f0f0;
+                border: 1px solid #ccc;
+                font-size: 12px;
+            }
+            QListWidget::item {
+                padding: 8px;
+                border-bottom: 1px solid #ddd;
+            }
+            QListWidget::item:selected {
+                background-color: #0078d4;
+                color: white;
+            }
+        """)
     
     def reset_to_defaults(self):
         self._settings = self._load_default_settings()
@@ -992,6 +1047,10 @@ class AdvancedSettingsDialog(QDialog):
         
         # History list with individual delete options
         self.history_list = QListWidget()
+        try:
+            self.history_list.setIconSize(QSize(16, 16))
+        except Exception:
+            pass
         self.history_list.setMaximumHeight(200)
         self._populate_history_list()
         history_layout.addWidget(self.history_list)
@@ -1181,6 +1240,14 @@ class AdvancedSettingsDialog(QDialog):
                 item_text = f"{title} - {url}"
                 item = QListWidgetItem(item_text)
                 item.setData(Qt.ItemDataRole.UserRole, (title, url))
+                # Apply favicon if available from cache only to avoid heavy loads here
+                try:
+                    if hasattr(self.parent_browser, '_get_favicon_cached'):
+                        icon = self.parent_browser._get_favicon_cached(url)
+                        if icon:
+                            item.setIcon(icon)
+                except Exception:
+                    pass
                 self.history_list.addItem(item)
     
     def _populate_cookies_list(self):
@@ -3098,7 +3165,22 @@ class Browser(QMainWindow):
         except Exception as e:
             print(f"Failed to initialize ad blocker: {e}")
             self.ad_blocker_rules = None
-        
+        # Favicon cache and fetcher
+        self._favicon_cache: dict[str, QIcon] = {}
+        self._favicon_pending: dict[str, list] = {}
+        self._favicon_default = QIcon()
+        try:
+            # Use a simple colored square as fallback to avoid theme icons
+            pm = QPixmap(16, 16)
+            pm.fill(QColor(200, 200, 200))
+            self._favicon_default = QIcon(pm)
+        except Exception:
+            pass
+        self._favicon_manager = QNetworkAccessManager(self)
+        # Local on-disk cache folder
+        self.favicon_dir = os.path.join(self.data_dir, 'favicons')
+        os.makedirs(self.favicon_dir, exist_ok=True)
+
         # Set up download manager
         self.download_manager = DownloadManager(self)
         QWebEngineProfile.defaultProfile().downloadRequested.connect(self.handle_download_request)
@@ -3308,6 +3390,160 @@ class Browser(QMainWindow):
                 search_url = search_urls.get(search_engine, search_urls['duckduckgo'])
                 url = search_url.format(url)
         self.tabs.currentWidget().setUrl(QUrl(url))
+
+    # -------------------- Favicon utilities --------------------
+    def _favicon_key_for_url(self, url: str) -> str:
+        try:
+            q = QUrl(url)
+            host = q.host() or url
+            return host.lower()
+        except Exception:
+            return str(url).lower()
+
+    def _favicon_path_for_key(self, key: str) -> str:
+        safe = re.sub(r"[^a-z0-9_.-]", "_", key)
+        return os.path.join(self.favicon_dir, f"{safe}.png")
+
+    def _favicon_from_disk(self, key: str) -> QIcon | None:
+        path = self._favicon_path_for_key(key)
+        if os.path.exists(path):
+            try:
+                pm = QPixmap(path)
+                if not pm.isNull():
+                    return QIcon(pm)
+            except Exception:
+                return None
+        return None
+
+    def _get_favicon_cached(self, url: str) -> QIcon | None:
+        """Return favicon from memory or disk cache only; do not trigger network fetch."""
+        key = self._favicon_key_for_url(url)
+        if key in self._favicon_cache:
+            return self._favicon_cache[key]
+        icon = self._favicon_from_disk(key)
+        if icon:
+            self._favicon_cache[key] = icon
+            return icon
+        return None
+
+    def _fetch_favicon(self, url: str, key: str, callbacks: list):
+        """Fetch favicon.ico for host; on load, save to disk, update callbacks.
+        callbacks: list of callables taking (QIcon)
+        """
+        # If already pending, queue callbacks
+        if key in self._favicon_pending:
+            self._favicon_pending[key].extend(callbacks)
+            return
+        self._favicon_pending[key] = list(callbacks)
+
+        # Build common favicon locations
+        q = QUrl(url)
+        if not q.scheme():
+            q.setScheme('https')
+        base = QUrl()
+        base.setScheme(q.scheme())
+        base.setHost(q.host())
+        candidates = [
+            QUrl(base.toString() + "/favicon.ico"),
+            QUrl(base.toString() + "/favicon.png"),
+        ]
+
+        def try_next(i=0):
+            if i >= len(candidates):
+                # Give up; use default
+                icon = self._favicon_default
+                self._favicon_cache[key] = icon
+                for cb in self._favicon_pending.pop(key, []):
+                    try:
+                        cb(icon)
+                    except Exception:
+                        pass
+                return
+
+            req = QNetworkRequest(candidates[i])
+            # Prefer HTTP/1.1 for small icon fetches to avoid some HTTP/2 edge cases
+            try:
+                attr = getattr(QNetworkRequest.Attribute, 'HTTP2AllowedAttribute', None)
+                if attr is None:
+                    attr = getattr(QNetworkRequest.Attribute, 'Http2AllowedAttribute', None)
+                if attr is not None:
+                    req.setAttribute(attr, False)
+            except Exception:
+                pass
+            reply = self._favicon_manager.get(req)
+
+            def on_finished():
+                ok = False
+                try:
+                    if reply.error() == reply.NetworkError.NoError:
+                        # Reject non-image responses and very large payloads
+                        try:
+                            ctype = str(reply.header(QNetworkRequest.KnownHeaders.ContentTypeHeader) or "")
+                        except Exception:
+                            ctype = ""
+                        if ctype and not ("image/" in ctype or "x-icon" in ctype or "vnd.microsoft.icon" in ctype):
+                            # Not an image; let finally advance to next
+                            return
+                        try:
+                            clen = int(reply.header(QNetworkRequest.KnownHeaders.ContentLengthHeader) or 0)
+                        except Exception:
+                            clen = 0
+                        if clen and clen > 1024 * 1024:
+                            # Too large; let finally advance to next
+                            return
+                        data = reply.readAll()
+                        # Hard limit if no Content-Length header
+                        if len(data) > 1024 * 1024:
+                            # Too large; let finally advance to next
+                            return
+                        pm = QPixmap()
+                        pm.loadFromData(bytes(data))
+                        if pm.isNull():
+                            # Invalid image; let finally advance to next
+                            return
+                        # Save to disk
+                        path = self._favicon_path_for_key(key)
+                        try:
+                            with open(path, 'wb') as f:
+                                f.write(bytes(data))
+                        except Exception:
+                            pass
+                        icon = QIcon(pm)
+                        self._favicon_cache[key] = icon
+                        for cb in self._favicon_pending.pop(key, []):
+                            try:
+                                cb(icon)
+                            except Exception:
+                                pass
+                        ok = True
+                        return
+                finally:
+                    reply.deleteLater()
+                    # If not successful, move to next candidate
+                    if not ok and key in self._favicon_pending:
+                        try_next(i + 1)
+
+            reply.finished.connect(on_finished)
+
+        try_next(0)
+
+    def _get_favicon_async(self, url: str, apply_icon):
+        """Get favicon for url; apply_icon is a callback that accepts QIcon."""
+        key = self._favicon_key_for_url(url)
+        # Memory cache
+        if key in self._favicon_cache:
+            apply_icon(self._favicon_cache[key])
+            return
+        # Disk cache
+        icon = self._favicon_from_disk(key)
+        if icon:
+            self._favicon_cache[key] = icon
+            apply_icon(icon)
+            return
+        # Fetch
+        self._fetch_favicon(url, key, [apply_icon])
+
+    # -------------------- End favicon utilities --------------------
 
     def create_menu_bar(self):
         menu_bar = self.menuBar()
@@ -3687,6 +3923,14 @@ class Browser(QMainWindow):
                     if not ft or ft in (title or "").lower() or ft in (url or "").lower():
                         item = QListWidgetItem(display)
                         item.setData(Qt.ItemDataRole.UserRole, url)
+                        # Set favicon asynchronously
+                        def _apply(icon, item_ref=item):
+                            try:
+                                if item_ref is not None:
+                                    item_ref.setIcon(icon)
+                            except Exception:
+                                pass
+                        self._get_favicon_async(url, _apply)
                         history_list.addItem(item)
 
             def on_item_clicked(item):
@@ -3765,6 +4009,14 @@ class Browser(QMainWindow):
                     if not ft or ft in (title or "").lower() or ft in (url or "").lower():
                         item = QListWidgetItem(display)
                         item.setData(Qt.ItemDataRole.UserRole, url)
+                        # Set favicon asynchronously
+                        def _apply(icon, item_ref=item):
+                            try:
+                                if item_ref is not None:
+                                    item_ref.setIcon(icon)
+                            except Exception:
+                                pass
+                        self._get_favicon_async(url, _apply)
                         bookmarks_list.addItem(item)
 
             def on_item_clicked(item):
@@ -3933,38 +4185,51 @@ class Browser(QMainWindow):
                 self.cookies_menu.addAction(cookie_action)
 
     def update_url_autocomplete(self):
-        """Build and apply URL bar autocomplete from history and bookmarks, labeled by source."""
+        """Build and apply URL bar autocomplete with icons from history and bookmarks."""
         try:
-            from PyQt6.QtCore import Qt, QStringListModel
+            from PyQt6.QtCore import Qt
             from PyQt6.QtWidgets import QCompleter
         except Exception:
             return
 
-        # Build labeled suggestions, preferring bookmarks over history, de-duped by URL
-        suggestions: list[str] = []
+        # Build label + maintain mapping to URL for icon loading
+        items: list[tuple[str, str]] = []  # (display_text, url)
         added_urls: set[str] = set()
 
         def add_entry(title: str, url: str, source: str):
             if not url or url in added_urls:
                 return
             base = f"{title} — {url}" if title else url
-            suggestions.append(f"{base} ({source})")
+            items.append((f"{base} ({source})", url))
             added_urls.add(url)
 
-        # Add bookmarks first (in stored order)
+        # Bookmarks then history
         for title, url in self.bookmarks:
             add_entry(title, url, "Bookmarks")
-        # Then add recent history (most recent first), skipping URLs already added
         for title, url in reversed(self.history[-500:]):
             add_entry(title, url, "History")
 
-        if not hasattr(self, '_url_completer_model'):
-            self._url_completer_model = QStringListModel(suggestions)
+        # Create or update item model with icons
+        if not hasattr(self, '_url_item_model'):
+            self._url_item_model = QStandardItemModel(self)
         else:
-            self._url_completer_model.setStringList(suggestions)
+            self._url_item_model.clear()
+
+        # Limit entries to avoid spawning too many network operations at once
+        for text, url in items[:600]:
+            it = QStandardItem(text)
+            it.setEditable(False)
+            # Load favicon asynchronously
+            def _apply(icon, item_ref=it):
+                try:
+                    if item_ref is not None:
+                        item_ref.setIcon(icon)
+                except Exception:
+                    pass
+            self._get_favicon_async(url, _apply)
+            self._url_item_model.appendRow(it)
 
         if not hasattr(self, '_url_completer'):
-            # Custom completer that inserts only the URL into the line edit
             extract = self._extract_url_from_completion_text
             class UrlOnlyCompleter(QCompleter):
                 def pathFromIndex(self_inner, index):
@@ -3974,17 +4239,17 @@ class Browser(QMainWindow):
                         return super().pathFromIndex(index)
                     return extract(str(text))
 
-            self._url_completer = UrlOnlyCompleter(self._url_completer_model, self)
+            self._url_completer = UrlOnlyCompleter(self._url_item_model, self)
             self._url_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-            # Match anywhere in the string for convenience
             try:
                 self._url_completer.setFilterMode(Qt.MatchFlag.MatchContains)
             except Exception:
                 pass
             self._url_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
-            # Navigate on completion activation
             self._url_completer.activated[str].connect(self._on_url_completion_activated)
             self.url_bar.setCompleter(self._url_completer)
+        else:
+            self._url_completer.setModel(self._url_item_model)
 
     def _on_url_completion_activated(self, text: str):
         """When a completion is chosen, extract URL and navigate."""
