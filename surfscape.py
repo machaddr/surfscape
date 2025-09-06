@@ -1439,6 +1439,7 @@ class DownloadItem:
         self.received_bytes = 0
         self.state = "In Progress"
         self.progress = 0
+        self._progress_timer = None
 
 class DownloadManager(QDialog):
     def __init__(self, parent=None):
@@ -1490,12 +1491,82 @@ class DownloadManager(QDialog):
         self.downloads_table.setItem(row, 3, QTableWidgetItem(size_text))
         self.downloads_table.setItem(row, 4, QTableWidgetItem(download_item.state))
         
-        download_item.download_request.downloadProgress.connect(
-            lambda received, total, row=row: self.update_progress(row, received, total)
-        )
-        download_item.download_request.finished.connect(
-            lambda row=row: self.download_finished(row)
-        )
+        try:
+            from PyQt6.QtWebEngineCore import QWebEngineDownloadRequest
+        except Exception:
+            QWebEngineDownloadRequest = None
+
+        # Poll progress periodically
+        progress_timer = QTimer(self)
+        progress_timer.setInterval(250)
+
+        def _poll_progress(_row=row, item=download_item):
+            try:
+                received = int(item.download_request.receivedBytes())
+            except Exception:
+                received = item.received_bytes
+            try:
+                total = int(item.download_request.totalBytes())
+            except Exception:
+                total = item.total_bytes
+            self.update_progress(_row, received, total)
+
+        progress_timer.timeout.connect(_poll_progress)
+        progress_timer.start()
+        download_item._progress_timer = progress_timer
+
+        # React to state changes for completion/cancel/interruption
+        def _on_state_changed(state, _row=row, item=download_item):
+            # Stop timer when no longer in progress
+            if hasattr(item, '_progress_timer') and item._progress_timer is not None:
+                try:
+                    # For Completed/Cancelled/Interrupted stop polling
+                    if QWebEngineDownloadRequest is None or state in (
+                        getattr(QWebEngineDownloadRequest.DownloadState, 'DownloadCompleted', 2),
+                        getattr(QWebEngineDownloadRequest.DownloadState, 'DownloadCancelled', 3),
+                        getattr(QWebEngineDownloadRequest.DownloadState, 'DownloadInterrupted', 4),
+                    ):
+                        item._progress_timer.stop()
+                        item._progress_timer.deleteLater()
+                        item._progress_timer = None
+                except Exception:
+                    # Best-effort cleanup
+                    try:
+                        item._progress_timer.stop()
+                        item._progress_timer.deleteLater()
+                    except Exception:
+                        pass
+                    item._progress_timer = None
+
+            # Update status by state
+            try:
+                if QWebEngineDownloadRequest and state == QWebEngineDownloadRequest.DownloadState.DownloadCompleted:
+                    self.download_finished(_row)
+                elif QWebEngineDownloadRequest and state == QWebEngineDownloadRequest.DownloadState.DownloadCancelled:
+                    if _row < len(self.downloads):
+                        self.downloads[_row].state = "Cancelled"
+                        self.downloads_table.setItem(_row, 4, QTableWidgetItem("Cancelled"))
+                elif QWebEngineDownloadRequest and state == QWebEngineDownloadRequest.DownloadState.DownloadInterrupted:
+                    if _row < len(self.downloads):
+                        self.downloads[_row].state = "Interrupted"
+                        self.downloads_table.setItem(_row, 4, QTableWidgetItem("Interrupted"))
+                else:
+                    # Fallback: when no enum available, mark as completed when received==total
+                    item = self.downloads[_row] if _row < len(self.downloads) else None
+                    if item and item.total_bytes > 0 and item.received_bytes >= item.total_bytes:
+                        self.download_finished(_row)
+            except Exception:
+                pass
+
+        # Connect state change if available
+        try:
+            download_item.download_request.stateChanged.connect(_on_state_changed)
+        except Exception:
+            # If stateChanged not available, try finished or rely on polling fallback
+            try:
+                download_item.download_request.finished.connect(lambda _row=row: self.download_finished(_row))
+            except Exception:
+                pass
     
     def update_progress(self, row, received_bytes, total_bytes):
         if row < len(self.downloads):
@@ -1523,6 +1594,14 @@ class DownloadManager(QDialog):
             progress_bar = self.downloads_table.cellWidget(row, 2)
             if progress_bar:
                 progress_bar.setValue(100)
+            # Ensure progress timer is stopped/cleaned
+            if hasattr(download_item, '_progress_timer') and download_item._progress_timer:
+                try:
+                    download_item._progress_timer.stop()
+                    download_item._progress_timer.deleteLater()
+                except Exception:
+                    pass
+                download_item._progress_timer = None
     
     def clear_completed_downloads(self):
         rows_to_remove = []
@@ -1540,12 +1619,28 @@ class DownloadManager(QDialog):
             os.system(f'xdg-open "{downloads_path}"' if os.name != 'nt' else f'explorer "{downloads_path}"')
     
     def format_bytes(self, bytes_count):
+        """Format a byte count into a human-readable string.
+        Handles edge cases and avoids using os.path math functions.
+        """
+        try:
+            import math
+        except ImportError:
+            # Fallback: simple formatting
+            return f"{bytes_count} B"
+
+        if bytes_count is None or bytes_count < 0:
+            return "Unknown"
         if bytes_count == 0:
             return "0 B"
-        k = 1024
-        sizes = ['B', 'KB', 'MB', 'GB', 'TB']
-        i = int(os.path.floor(os.path.log(bytes_count) / os.path.log(k)))
-        return f"{round(bytes_count / pow(k, i), 2)} {sizes[i]}"
+
+        k = 1024.0
+        sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB']
+        i = int(math.floor(math.log(bytes_count, k))) if bytes_count > 0 else 0
+        i = max(0, min(i, len(sizes) - 1))
+        value = bytes_count / (k ** i)
+        # Use 2 decimal places for KB and above, no decimals for bytes
+        formatted = f"{value:.2f}" if i > 0 else f"{int(value)}"
+        return f"{formatted} {sizes[i]}"
 
 class FindDialog(QDialog):
     def __init__(self, browser, parent=None):
