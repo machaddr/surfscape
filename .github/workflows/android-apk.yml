@@ -53,6 +53,7 @@ jobs:
           # Use the console script to avoid import issues with relative imports inside PySide6 scripts
           pushd android >/dev/null
           pyside6-android-deploy \
+            -f \
             -c pyside6-android.json \
             --sdk-path "$ANDROID_SDK_ROOT" \
             --ndk-path "$ANDROID_NDK_ROOT" \
