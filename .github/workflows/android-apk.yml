@@ -68,7 +68,8 @@ jobs:
             ls -l "$ROOT_DIR/dist-wheels" || true
             exit 1
           fi
-          # Actual build
+          # Actual build: run from the Android application directory so main.py is in CWD
+          pushd android
           pyside6-android-deploy \
             -f \
             --name "Surfscape" \
@@ -78,8 +79,8 @@ jobs:
             --wheel-shiboken "$WHEEL_SHIBOKEN" \
             --keep-deployment-files \
             -v
-          popd >/dev/null
           echo "APK artifacts:" && find . -name "*.apk" -o -name "*.aab"
+          popd
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
