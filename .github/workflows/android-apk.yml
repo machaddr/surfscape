@@ -54,7 +54,9 @@ jobs:
           pushd android >/dev/null
           pyside6-android-deploy \
             -f \
-            -c pyside6-android.json \
+            --init \
+            --name "Surfscape" \
+            --extra-modules QtWebView \
             --sdk-path "$ANDROID_SDK_ROOT" \
             --ndk-path "$ANDROID_NDK_ROOT" \
             --keep-deployment-files \
