@@ -69,25 +69,27 @@ jobs:
           fi
           # Use the console script to avoid import issues with relative imports inside PySide6 scripts
           pushd android >/dev/null
-          # Phase 1: init only (no build), to generate buildozer.spec
-          pyside6-android-deploy \
-            -f \
-            --init --dry-run \
-            --name "Surfscape" \
-            --sdk-path "$ANDROID_SDK_ROOT" \
-            --ndk-path "$ANDROID_NDK_ROOT" \
-            --wheel-pyside "$WHEEL_PYSIDE" \
-            --wheel-shiboken "$WHEEL_SHIBOKEN" \
-            --keep-deployment-files \
-            -v
-          # Ensure buildozer.spec exists and target arm64 only
+          # Ensure a minimal buildozer.spec exists with arm64-v8a arch
           if [ ! -f buildozer.spec ]; then
-            echo "buildozer.spec not generated" >&2
-            ls -la
-            exit 1
+            cat > buildozer.spec <<'EOF'
+[app]
+title = Surfscape
+package.name = browser
+package.domain = org.surfscape
+source.dir = .
+version = 1.0
+orientation = portrait
+fullscreen = 0
+android.archs = arm64-v8a
+
+[buildozer]
+log_level = 2
+warn_on_root = 0
+EOF
           fi
-          sed -i 's/^#\?\s*android\.archs\s*=.*/android.archs = arm64-v8a/' buildozer.spec
-          # Phase 2: actual build
+          # Force arch to arm64-v8a in case the file existed
+          sed -i 's/^#\?\s*android\.archs\s*=.*/android.archs = arm64-v8a/' buildozer.spec || true
+          # Actual build
           pyside6-android-deploy \
             -f \
             --name "Surfscape" \
