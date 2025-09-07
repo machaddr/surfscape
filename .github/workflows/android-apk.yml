@@ -72,13 +72,12 @@ jobs:
           fi
           pyside6-android-deploy \
             -f \
+            -c pyside6-android.json \
             --name "Surfscape" \
             --sdk-path "$ANDROID_SDK_ROOT" \
             --ndk-path "$ANDROID_NDK_ROOT" \
             --wheel-pyside "$WHEEL_PYSIDE" \
             --wheel-shiboken "$WHEEL_SHIBOKEN" \
-            --qt-host-path "$QT_HOST_PATH" \
-            --qt-target-path "$QT_ANDROID_DIR" \
             --keep-deployment-files \
             -v
           echo "APK artifacts:" && find . -name "*.apk" -o -name "*.aab"
