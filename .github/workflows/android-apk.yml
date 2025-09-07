@@ -38,7 +38,7 @@ jobs:
           pip install "aqtinstall>=3.1.0"
           QT_VERSION=6.7.3
           # Desktop (gcc_64) is required for host tools used by pyside6-android-deploy (e.g., rcc, lrelease).
-          aqt install-qt linux desktop "$QT_VERSION" gcc_64 --outputdir /opt/Qt
+          aqt install-qt linux desktop "$QT_VERSION" linux_gcc_64 --outputdir /opt/Qt
           # Android target (ARM64)
           aqt install-qt linux android "$QT_VERSION" android_arm64_v8a --outputdir /opt/Qt
 
