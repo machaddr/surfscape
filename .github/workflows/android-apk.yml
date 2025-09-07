@@ -32,27 +32,24 @@ jobs:
           yes | sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" \
                            "ndk;25.2.9519653" "cmake;3.22.1"
 
-  - name: Install Qt via aqtinstall
+      - name: Install Qt via aqtinstall
         run: |
           pip install aqtinstall
           # Install Qt 6.x for Android (ARM64) with required modules
-          aqt install-qt linux android 6.6.3 android_arm64_v8a --outputdir /opt/Qt \
-    -m qtwebview qtdeclarative qtquickcontrols2 qtshadertools
+          aqt install-qt linux android 6.6.3 android_arm64_v8a --outputdir /opt/Qt -m qtwebview qtdeclarative qtquickcontrols2 qtshadertools
 
       - name: Install PySide6 tooling
         run: |
           pip install "PySide6==6.6.3" "shiboken6==6.6.3" pyside6-android-deploy
 
-  - name: Build APK (PySide6 Android deploy)
-        env:
-          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
-          ANDROID_NDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}/ndk/25.2.9519653
-          QT_ANDROID_DIR: /opt/Qt/6.6.3/android_arm64_v8a
+      - name: Build APK (PySide6 Android deploy)
         run: |
+          export ANDROID_NDK_ROOT="$ANDROID_SDK_ROOT/ndk/25.2.9519653"
+          export QT_ANDROID_DIR="/opt/Qt/6.6.3/android_arm64_v8a"
           pyside6-android-deploy \
             --qt ${QT_ANDROID_DIR} \
             --config android/pyside6-android.json \
-    --keep-deployment-settings
+            --keep-deployment-settings
           echo "APK artifacts:" && find . -name "*.apk" -o -name "*.aab"
 
       - name: Upload artifact
