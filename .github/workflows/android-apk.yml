@@ -68,28 +68,6 @@ jobs:
             ls -l "$ROOT_DIR/dist-wheels" || true
             exit 1
           fi
-          # Use the console script to avoid import issues with relative imports inside PySide6 scripts
-          pushd android >/dev/null
-          # Ensure a minimal buildozer.spec exists with arm64-v8a arch
-          if [ ! -f buildozer.spec ]; then
-            cat > buildozer.spec <<'EOF'
-[app]
-title = Surfscape
-package.name = browser
-package.domain = org.surfscape
-source.dir = .
-version = 1.0
-orientation = portrait
-fullscreen = 0
-android.archs = arm64-v8a
-
-[buildozer]
-log_level = 2
-warn_on_root = 0
-EOF
-          fi
-          # Force arch to arm64-v8a in case the file existed
-          sed -i 's/^#\?\s*android\.archs\s*=.*/android.archs = arm64-v8a/' buildozer.spec || true
           # Actual build
           pyside6-android-deploy \
             -f \
