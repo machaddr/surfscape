@@ -50,6 +50,19 @@ jobs:
           export QT_ANDROID_DIR="/opt/Qt/6.6.3/android_arm64_v8a"
           export QT_HOST_PATH="/opt/Qt/6.6.3/gcc_64"
           export PATH="$QT_HOST_PATH/bin:$PATH"
+
+          # Prepare wheels required by pyside6-android-deploy
+          ROOT_DIR="$PWD"
+          mkdir -p "$ROOT_DIR/dist-wheels"
+          pip download --only-binary=:all: --no-deps -d "$ROOT_DIR/dist-wheels" \
+            "PySide6==6.6.3" "shiboken6==6.6.3"
+          WHEEL_PYSIDE=$(ls "$ROOT_DIR"/dist-wheels/PySide6-6.6.3-*.whl | head -n1)
+          WHEEL_SHIBOKEN=$(ls "$ROOT_DIR"/dist-wheels/shiboken6-6.6.3-*.whl | head -n1)
+          if [ ! -f "$WHEEL_PYSIDE" ] || [ ! -f "$WHEEL_SHIBOKEN" ]; then
+            echo "Failed to download PySide6/shiboken6 wheels" >&2
+            ls -l "$ROOT_DIR/dist-wheels" || true
+            exit 1
+          fi
           # Use the console script to avoid import issues with relative imports inside PySide6 scripts
           pushd android >/dev/null
           pyside6-android-deploy \
@@ -59,6 +72,8 @@ jobs:
             --extra-modules QtWebView \
             --sdk-path "$ANDROID_SDK_ROOT" \
             --ndk-path "$ANDROID_NDK_ROOT" \
+            --wheel-pyside "$WHEEL_PYSIDE" \
+            --wheel-shiboken "$WHEEL_SHIBOKEN" \
             --keep-deployment-files \
             -v
           popd >/dev/null
