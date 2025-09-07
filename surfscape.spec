@@ -5,7 +5,7 @@ a = Analysis(
     ['surfscape.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('icon/icon.png', 'icon')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

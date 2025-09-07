@@ -3195,10 +3195,19 @@ class Browser(QMainWindow):
         self.setWindowTitle("surfscape")
         self.setMinimumSize(800, 640)
         
-        # Use a transparent pixmap
-        transparent_pixmap = QPixmap(1, 1)
-        transparent_pixmap.fill()
-        self.setWindowIcon(QIcon(transparent_pixmap))
+        # Set application icon if available
+        try:
+            icon_path = os.path.join(os.path.dirname(__file__), 'icon', 'icon.png')
+            if os.path.exists(icon_path):
+                self.setWindowIcon(QIcon(icon_path))
+            else:
+                transparent_pixmap = QPixmap(1, 1)
+                transparent_pixmap.fill()
+                self.setWindowIcon(QIcon(transparent_pixmap))
+        except Exception:
+            transparent_pixmap = QPixmap(1, 1)
+            transparent_pixmap.fill()
+            self.setWindowIcon(QIcon(transparent_pixmap))
         
         self.showMaximized()
 

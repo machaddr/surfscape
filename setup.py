@@ -49,7 +49,7 @@ setup(
     },
     data_files=[
         ("share/applications", ["debian/surfscape.desktop"]),
-        ("share/icons/hicolor/256x256/apps", ["screenshots/browser.png"]),
+        ("share/icons/hicolor/256x256/apps", ["icon/icon.png"]),
         ("share/doc/surfscape", ["README.md", "LICENSE"]),
     ],
     include_package_data=True,

@@ -1,0 +1,64 @@
+name: android-apk
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Java (Android build)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: |
+          yes | sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" \
+                           "ndk;25.2.9519653" "cmake;3.22.1"
+
+  - name: Install Qt via aqtinstall
+        run: |
+          pip install aqtinstall
+          # Install Qt 6.x for Android (ARM64) with required modules
+          aqt install-qt linux android 6.6.3 android_arm64_v8a --outputdir /opt/Qt \
+    -m qtwebview qtdeclarative qtquickcontrols2 qtshadertools
+
+      - name: Install PySide6 tooling
+        run: |
+          pip install "PySide6==6.6.3" "shiboken6==6.6.3" pyside6-android-deploy
+
+  - name: Build APK (PySide6 Android deploy)
+        env:
+          ANDROID_SDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}
+          ANDROID_NDK_ROOT: ${{ env.ANDROID_SDK_ROOT }}/ndk/25.2.9519653
+          QT_ANDROID_DIR: /opt/Qt/6.6.3/android_arm64_v8a
+        run: |
+          pyside6-android-deploy \
+            --qt ${QT_ANDROID_DIR} \
+            --config android/pyside6-android.json \
+    --keep-deployment-settings
+          echo "APK artifacts:" && find . -name "*.apk" -o -name "*.aab"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: surfscape-android
+          path: |
+            **/*.apk
+            **/*.aab
