@@ -51,12 +51,14 @@ jobs:
           export QT_HOST_PATH="/opt/Qt/6.6.3/gcc_64"
           export PATH="$QT_HOST_PATH/bin:$PATH"
           # Use the console script to avoid import issues with relative imports inside PySide6 scripts
+          pushd android >/dev/null
           pyside6-android-deploy \
-            -c android/pyside6-android.json \
+            -c pyside6-android.json \
             --sdk-path "$ANDROID_SDK_ROOT" \
             --ndk-path "$ANDROID_NDK_ROOT" \
             --keep-deployment-files \
             -v
+          popd >/dev/null
           echo "APK artifacts:" && find . -name "*.apk" -o -name "*.aab"
 
       - name: Upload artifact
