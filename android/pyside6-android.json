@@ -3,7 +3,7 @@
     "name": "Surfscape",
     "package": "org.surfscape.browser",
     "version": "1.0",
-  "icon": "../icon/icon.png",
+    "icon": "../icon/icon.png",
     "permissions": [
       "INTERNET"
     ]
@@ -12,13 +12,21 @@
     "modules": [
       "qml",
       "quick",
-      "webview"
+      "quickcontrols2",
+      "quicklayouts",
+      "quickdialogs2",
+      "webview",
+      "network"
     ],
     "features": []
   },
   "python": {
-  "entrypoint": "main.py",
-    "requirements": []
+    "entrypoint": "main.py",
+    "requirements": [
+      "PySide6==6.6.3",
+      "PySide6-Addons==6.6.3",
+      "shiboken6==6.6.3"
+    ]
   },
   "android": {
     "sdk": {
