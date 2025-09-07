@@ -28,56 +28,38 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK components
+    - name: Install Android SDK components
         run: |
-          yes | sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0" \
-                           "ndk;25.2.9519653" "cmake;3.22.1"
+      yes | sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" \
+               "ndk;27.1.12297006" "cmake;3.30.5"
 
-      - name: Install Qt (host tools + Android) via aqtinstall
+    - name: Install Qt (host tools + Android) via aqtinstall
         run: |
           pip install "aqtinstall>=3.1.0"
-          QT_VERSION=6.6.3
+      QT_VERSION=6.7.3
           # Desktop (gcc_64) is required for host tools used by pyside6-android-deploy (e.g., rcc, lrelease).
           aqt install-qt linux desktop "$QT_VERSION" gcc_64 --outputdir /opt/Qt
           # Android target (ARM64)
           aqt install-qt linux android "$QT_VERSION" android_arm64_v8a --outputdir /opt/Qt
 
-      - name: Install PySide6 tooling
+    - name: Install PySide6 tooling
         run: |
-          pip install "PySide6==6.6.3" "PySide6-Addons==6.6.3" "shiboken6==6.6.3"
+      pip install "PySide6==6.7.3" "PySide6-Addons==6.7.3" "shiboken6==6.7.3"
 
       - name: Build APK (PySide6 Android deploy)
         working-directory: android
         run: |
-          export ANDROID_NDK_ROOT="$ANDROID_SDK_ROOT/ndk/25.2.9519653"
-          export QT_ANDROID_DIR="/opt/Qt/6.6.3/android_arm64_v8a"
-          export QT_HOST_PATH="/opt/Qt/6.6.3/gcc_64"
+          export ANDROID_NDK_ROOT="$ANDROID_SDK_ROOT/ndk/27.1.12297006"
+          export QT_ANDROID_DIR="/opt/Qt/6.7.3/android_arm64_v8a"
+          export QT_HOST_PATH="/opt/Qt/6.7.3/gcc_64"
           export PATH="$QT_HOST_PATH/bin:$PATH"
-
-          # Prepare wheels required by pyside6-android-deploy
-          ROOT_DIR="$PWD"
-          mkdir -p "$ROOT_DIR/dist-wheels"
-          pip download --only-binary=:all: --no-deps -d "$ROOT_DIR/dist-wheels" \
-            "PySide6==6.6.3" "PySide6-Addons==6.6.3" "PySide6-Essentials==6.6.3" "shiboken6==6.6.3"
-          # Prefer the Addons wheel (contains WebView and other add-on libs)
-          WHEEL_PYSIDE=$(ls "$ROOT_DIR"/dist-wheels/PySide6_Addons-6.6.3-*.whl 2>/dev/null | head -n1)
-          if [ -z "$WHEEL_PYSIDE" ]; then
-            WHEEL_PYSIDE=$(ls "$ROOT_DIR"/dist-wheels/PySide6-6.6.3-*.whl 2>/dev/null | head -n1)
-          fi
-          WHEEL_SHIBOKEN=$(ls "$ROOT_DIR"/dist-wheels/shiboken6-6.6.3-*.whl | head -n1)
-          if [ ! -f "$WHEEL_PYSIDE" ] || [ ! -f "$WHEEL_SHIBOKEN" ]; then
-            echo "Failed to download PySide6/shiboken6 wheels" >&2
-            ls -l "$ROOT_DIR/dist-wheels" || true
-            exit 1
-          fi
           pyside6-android-deploy \
             -f \
-            -c pyside6-android.json \
             --name "Surfscape" \
             --sdk-path "$ANDROID_SDK_ROOT" \
             --ndk-path "$ANDROID_NDK_ROOT" \
-            --wheel-pyside "$WHEEL_PYSIDE" \
-            --wheel-shiboken "$WHEEL_SHIBOKEN" \
+            --qt-host-path "$QT_HOST_PATH" \
+            --qt-target-path "$QT_ANDROID_DIR" \
             --keep-deployment-files \
             -v
           echo "APK artifacts:" && find . -name "*.apk" -o -name "*.aab"
