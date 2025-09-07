@@ -35,9 +35,8 @@ jobs:
       - name: Install Qt via aqtinstall
         run: |
           pip install aqtinstall
-          # Install Qt 6.6.3 Desktop (host tools) with required modules
-          aqt install-qt linux desktop 6.6.3 gcc_64 --outputdir /opt/Qt \
-            -m qtdeclarative qtquickcontrols2 qtwebview qtshadertools qttools
+          # Install Qt 6.6.3 Desktop (host tools)
+          aqt install-qt linux desktop 6.6.3 gcc_64 --outputdir /opt/Qt
           # Install Qt 6.6.3 for Android (ARM64). Do not pass -m; modules listing isn't supported the same way on Android.
           aqt install-qt linux android 6.6.3 android_arm64_v8a --outputdir /opt/Qt
 
