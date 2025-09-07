@@ -17,7 +17,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Set up Java (Android build)
         uses: actions/setup-java@v4
@@ -28,23 +28,23 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-    - name: Install Android SDK components
+      - name: Install Android SDK components
         run: |
-      yes | sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" \
+          yes | sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" \
                "ndk;27.1.12297006" "cmake;3.30.5"
 
-    - name: Install Qt (host tools + Android) via aqtinstall
+      - name: Install Qt (host tools + Android) via aqtinstall
         run: |
           pip install "aqtinstall>=3.1.0"
-      QT_VERSION=6.7.3
+          QT_VERSION=6.7.3
           # Desktop (gcc_64) is required for host tools used by pyside6-android-deploy (e.g., rcc, lrelease).
           aqt install-qt linux desktop "$QT_VERSION" gcc_64 --outputdir /opt/Qt
           # Android target (ARM64)
           aqt install-qt linux android "$QT_VERSION" android_arm64_v8a --outputdir /opt/Qt
 
-    - name: Install PySide6 tooling
+      - name: Install PySide6 tooling
         run: |
-      pip install "PySide6==6.7.3" "PySide6-Addons==6.7.3" "shiboken6==6.7.3"
+          pip install "PySide6==6.7.3" "PySide6-Addons==6.7.3" "shiboken6==6.7.3"
 
       - name: Build APK (PySide6 Android deploy)
         working-directory: android
