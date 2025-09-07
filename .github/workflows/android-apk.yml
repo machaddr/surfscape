@@ -42,14 +42,14 @@ jobs:
 
       - name: Install PySide6 tooling
         run: |
-          pip install "PySide6==6.6.3" "shiboken6==6.6.3" pyside6-android-deploy
+          pip install "PySide6==6.6.3" "shiboken6==6.6.3"
 
-      - name: Build APK (PySide6 Android deploy)
+    - name: Build APK (PySide6 Android deploy)
         run: |
           export ANDROID_NDK_ROOT="$ANDROID_SDK_ROOT/ndk/25.2.9519653"
           export QT_ANDROID_DIR="/opt/Qt/6.6.3/android_arm64_v8a"
           export QT_HOST_PATH="/opt/Qt/6.6.3/gcc_64"
-          pyside6-android-deploy \
+      python -m PySide6.scripts.android_deploy \
             --qt ${QT_ANDROID_DIR} \
             --config android/pyside6-android.json \
             --keep-deployment-settings
