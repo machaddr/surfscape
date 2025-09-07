@@ -42,9 +42,9 @@ jobs:
           # Android target (ARM64)
           aqt install-qt linux android "$QT_VERSION" android_arm64_v8a --outputdir /opt/Qt
 
-        - name: Install PySide6 tooling
+      - name: Install PySide6 tooling
         run: |
-            pip install "PySide6==6.6.3" "PySide6-Addons==6.6.3" "shiboken6==6.6.3"
+          pip install "PySide6==6.6.3" "PySide6-Addons==6.6.3" "shiboken6==6.6.3"
 
       - name: Build APK (PySide6 Android deploy)
         working-directory: android
