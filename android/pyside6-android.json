@@ -2,7 +2,7 @@
   "application": {
     "name": "Surfscape",
     "package": "org.surfscape.browser",
-    "version": "1.0.0",
+    "version": "1.0",
   "icon": "../icon/icon.png",
     "permissions": [
       "INTERNET"

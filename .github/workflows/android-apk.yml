@@ -55,8 +55,12 @@ jobs:
           ROOT_DIR="$PWD"
           mkdir -p "$ROOT_DIR/dist-wheels"
           pip download --only-binary=:all: --no-deps -d "$ROOT_DIR/dist-wheels" \
-            "PySide6==6.6.3" "shiboken6==6.6.3"
-          WHEEL_PYSIDE=$(ls "$ROOT_DIR"/dist-wheels/PySide6-6.6.3-*.whl | head -n1)
+            "PySide6==6.6.3" "PySide6-Addons==6.6.3" "PySide6-Essentials==6.6.3" "shiboken6==6.6.3"
+          # Prefer the Addons wheel (contains WebView and other add-on libs)
+          WHEEL_PYSIDE=$(ls "$ROOT_DIR"/dist-wheels/PySide6_Addons-6.6.3-*.whl 2>/dev/null | head -n1)
+          if [ -z "$WHEEL_PYSIDE" ]; then
+            WHEEL_PYSIDE=$(ls "$ROOT_DIR"/dist-wheels/PySide6-6.6.3-*.whl 2>/dev/null | head -n1)
+          fi
           WHEEL_SHIBOKEN=$(ls "$ROOT_DIR"/dist-wheels/shiboken6-6.6.3-*.whl | head -n1)
           if [ ! -f "$WHEEL_PYSIDE" ] || [ ! -f "$WHEEL_SHIBOKEN" ]; then
             echo "Failed to download PySide6/shiboken6 wheels" >&2
