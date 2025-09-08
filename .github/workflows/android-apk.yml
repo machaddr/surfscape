@@ -57,11 +57,42 @@ jobs:
           export ANDROID_NDK_ROOT="$ANDROID_SDK_ROOT/ndk/27.1.12297006"
           export QT_HOST_PATH="/opt/Qt/6.9.2/gcc_64"
           export PATH="$QT_HOST_PATH/bin:$PATH"
+          # Download Android (arm64-v8a) wheels for PySide6 Addons and shiboken6 from Qt official releases
+          set -euo pipefail
+          PYSIDE_VER=6.9.2
+          BASE_URL="https://download.qt.io/official_releases/QtForPython"
+          mkdir -p dist-wheels
+          fetch_wheel() {
+            local pkg_dir="$1"  # e.g. pyside6-addons or shiboken6
+            local out_var="$2"  # variable name to export path into
+            local index_url="$BASE_URL/$pkg_dir/$PYSIDE_VER/"
+            echo "Fetching index: $index_url" >&2
+            local wheel_name
+            wheel_name=$(curl -fsSL "$index_url" | \
+              grep -Eo '[^" ]+\.whl' | \
+              grep -E 'android_aarch64' | \
+              grep -E 'abi3' | \
+              head -n1 || true)
+            if [ -z "${wheel_name:-}" ]; then
+              echo "Could not find Android aarch64 wheel at $index_url" >&2
+              return 1
+            fi
+            echo "Found wheel: $wheel_name" >&2
+            curl -fsSL -o "dist-wheels/$wheel_name" "$index_url$wheel_name"
+            eval "$out_var=dist-wheels/$wheel_name"
+          }
+          WHEEL_PYSIDE=""
+          WHEEL_SHIBOKEN=""
+          fetch_wheel pyside6-addons WHEEL_PYSIDE
+          fetch_wheel shiboken6 WHEEL_SHIBOKEN
+          echo "Wheels ready: $WHEEL_PYSIDE | $WHEEL_SHIBOKEN"
           pyside6-android-deploy \
             -f \
             --name "Surfscape" \
             --sdk-path "$ANDROID_SDK_ROOT" \
             --ndk-path "$ANDROID_NDK_ROOT" \
+            --wheel-pyside "$WHEEL_PYSIDE" \
+            --wheel-shiboken "$WHEEL_SHIBOKEN" \
             --keep-deployment-files \
             -v
           echo "APK artifacts:" && find . -name "*.apk" -o -name "*.aab"
