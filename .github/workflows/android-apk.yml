@@ -85,7 +85,7 @@ jobs:
           fetch_wheel() {
             local pkg_dir="$1"  # e.g. pyside6-addons or shiboken6
             local out_var="$2"  # variable name to export path into
-            local index_url="$BASE_URL/$pkg_dir"
+            local index_url="$BASE_URL/$pkg_dir/"
             echo "Fetching index: $index_url" >&2
             local wheel_name
             wheel_name=$(curl -fsSL "$index_url" | \
@@ -103,13 +103,10 @@ jobs:
             eval "$out_var=dist-wheels/$wheel_name"
           }
           WHEEL_PYSIDE=""
-          WHEEL_PYSIDE_ADDONS=""
           WHEEL_SHIBOKEN=""
           fetch_wheel pyside6 WHEEL_PYSIDE
-          # Directory name on Qt download server uses underscore for addons
-          fetch_wheel pyside6_addons WHEEL_PYSIDE_ADDONS
           fetch_wheel shiboken6 WHEEL_SHIBOKEN
-          echo "Wheels ready: $WHEEL_PYSIDE | $WHEEL_PYSIDE_ADDONS | $WHEEL_SHIBOKEN"
+          echo "Wheels ready: $WHEEL_PYSIDE | $WHEEL_SHIBOKEN"
 
           pyside6-android-deploy \
             --init \
@@ -118,7 +115,6 @@ jobs:
             --sdk-path "$ANDROID_SDK_ROOT" \
             --ndk-path "$ANDROID_NDK_ROOT" \
             --wheel-pyside "$WHEEL_PYSIDE" \
-            --wheel-pyside-addons "$WHEEL_PYSIDE_ADDONS" \
             --wheel-shiboken "$WHEEL_SHIBOKEN" \
             --keep-deployment-files \
             -v
