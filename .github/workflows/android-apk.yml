@@ -38,14 +38,14 @@ jobs:
           python -m pip install "aqtinstall>=3.1.0"
 
           # Desktop (gcc_64) is required for host tools used by pyside6-android-deploy (e.g., rcc, lrelease).
-          python -m aqt install-qt linux desktop 6.6.3 gcc_64 --outputdir /opt/Qt
+          python -m aqt install-qt linux desktop 6.9.2 gcc_64 --outputdir /opt/Qt
 
           # Install the Qt for Android kit for arm64-v8a so deploy can link the correct Android libs.
-          python -m aqt install-qt linux android 6.6.3 android_arm64_v8a --outputdir /opt/Qt
+          python -m aqt install-qt linux android 6.9.2 android_arm64_v8a --outputdir /opt/Qt
 
       - name: Install PySide6 tooling
         run: |
-          pip install PySide6 PySide6-Addons shiboken6
+          pip install "PySide6==6.9.2" "PySide6-Addons==6.9.2" "shiboken6==6.9.2"
 
       - name: Install PySide6 Android deploy requirements
         run: |
@@ -55,27 +55,13 @@ jobs:
         working-directory: android
         run: |
           export ANDROID_NDK_ROOT="$ANDROID_SDK_ROOT/ndk/27.1.12297006"
-          export QT_HOST_PATH="/opt/Qt/6.6.3/gcc_64"
+          export QT_HOST_PATH="/opt/Qt/6.9.2/gcc_64"
           export PATH="$QT_HOST_PATH/bin:$PATH"
-
-          # Download Android wheels for PySide6 Addons and shiboken6 matching Python 3.11 (android_aarch64)
-          mkdir -p dist-wheels
-          python -m pip download --only-binary=:all: --no-deps -d dist-wheels \
-            PySide6-Addons shiboken6
-          WHEEL_PYSIDE=$(ls dist-wheels/pyside6_addons-*.whl | head -n1)
-          WHEEL_SHIBOKEN=$(ls dist-wheels/shiboken6-*.whl | head -n1)
-          if [ ! -f "$WHEEL_PYSIDE" ] || [ ! -f "$WHEEL_SHIBOKEN" ]; then
-            echo "Failed to download required Android wheels" >&2
-            ls -l dist-wheels || true
-            exit 2
-          fi
           pyside6-android-deploy \
             -f \
             --name "Surfscape" \
             --sdk-path "$ANDROID_SDK_ROOT" \
             --ndk-path "$ANDROID_NDK_ROOT" \
-            --wheel-pyside "$WHEEL_PYSIDE" \
-            --wheel-shiboken "$WHEEL_SHIBOKEN" \
             --keep-deployment-files \
             -v
           echo "APK artifacts:" && find . -name "*.apk" -o -name "*.aab"
