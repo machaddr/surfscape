@@ -36,9 +36,9 @@ jobs:
       - name: Install Qt (host tools + Android) via aqtinstall
           run: |
             python -m pip install "aqtinstall>=3.1.0"
-        QT_VERSION=6.6.3
-        # Desktop (gcc_64) is required for host tools used by pyside6-android-deploy (e.g., rcc, lrelease).
-        python -m aqt install-qt linux desktop "$QT_VERSION" gcc_64 --outputdir /opt/Qt
+            QT_VERSION=6.6.3
+            # Desktop (gcc_64) is required for host tools used by pyside6-android-deploy (e.g., rcc, lrelease).
+            python -m aqt install-qt linux desktop "$QT_VERSION" gcc_64 --outputdir /opt/Qt
 
       - name: Install PySide6 tooling
         run: |
