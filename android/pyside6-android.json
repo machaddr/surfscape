@@ -23,9 +23,9 @@
   "python": {
     "entrypoint": "main.py",
     "requirements": [
-  "PySide6==6.7.3",
-  "PySide6-Addons==6.7.3",
-  "shiboken6==6.7.3"
+      "PySide6",
+      "PySide6-Addons",
+      "shiboken6"
     ]
   },
   "android": {
