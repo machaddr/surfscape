@@ -54,7 +54,6 @@ jobs:
           # Download Android wheels for PySide6 Addons and shiboken6 matching Python 3.11 (android_aarch64)
           mkdir -p dist-wheels
           python -m pip download --only-binary=:all: --no-deps -d dist-wheels \
-            --platform android_aarch64 \
             PySide6-Addons shiboken6
           WHEEL_PYSIDE=$(ls dist-wheels/PySide6_Addons-*.whl | head -n1)
           WHEEL_SHIBOKEN=$(ls dist-wheels/shiboken6-*.whl | head -n1)
