@@ -58,7 +58,7 @@ jobs:
           python -m pip install "aqtinstall>=3.1.0"
 
           # Desktop (gcc_64) is required for host tools used by pyside6-android-deploy (e.g., rcc, lrelease).
-          python -m aqt install-qt linux desktop 6.9.2 linux_gcc_64 --outputdir /opt/Qt
+          python -m aqt install-qt linux desktop 6.9.2 gcc_64 --outputdir /opt/Qt
 
           # Install the Qt for Android kit for arm64-v8a so deploy can link the correct Android libs.
           python -m aqt install-qt linux android 6.9.2 android_arm64_v8a --outputdir /opt/Qt
@@ -107,6 +107,19 @@ jobs:
           fetch_wheel pyside6 WHEEL_PYSIDE
           fetch_wheel shiboken6 WHEEL_SHIBOKEN
           echo "Wheels ready: $WHEEL_PYSIDE | $WHEEL_SHIBOKEN"
+          
+          pyside6-android-deploy \
+            --init \
+            -f \
+            --name "Surfscape" \
+            --sdk-path "$ANDROID_SDK_ROOT" \
+            --ndk-path "$ANDROID_NDK_ROOT" \
+            --wheel-pyside "$WHEEL_PYSIDE" \
+            --wheel-shiboken "$WHEEL_SHIBOKEN" \
+            --keep-deployment-files \
+            -v
+
+          # Now run the full build
           pyside6-android-deploy \
             -f \
             --name "Surfscape" \
