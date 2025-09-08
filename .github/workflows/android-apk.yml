@@ -44,6 +44,10 @@ jobs:
         run: |
           pip install PySide6 PySide6-Addons shiboken6
 
+      - name: Install PySide6 Android deploy requirements
+        run: |
+          python -m pip install jinja2 pkginfo tqdm "packaging==24.1"
+
       - name: Build APK (PySide6 Android deploy)
         working-directory: android
         run: |
