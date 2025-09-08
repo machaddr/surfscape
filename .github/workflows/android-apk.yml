@@ -33,6 +33,26 @@ jobs:
           yes | sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" \
                "ndk;27.1.12297006" "cmake;3.30.5"
 
+      - name: Ensure Buildozer uses modern sdkmanager
+        run: |
+          set -eux
+          SDK="$ANDROID_SDK_ROOT"
+          # Remove legacy tools dir if present and point it to cmdline-tools sdkmanager
+          sudo rm -rf "$SDK/tools" || true
+          sudo mkdir -p "$SDK/tools/bin"
+          if [ -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SRC="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          else
+            SRC_DIR=$(ls -d "$SDK"/cmdline-tools/*/bin 2>/dev/null | head -n1)
+            if [ -z "${SRC_DIR:-}" ]; then
+              echo "No cmdline-tools found under $SDK/cmdline-tools" >&2
+              exit 1
+            fi
+            SRC="$SRC_DIR/sdkmanager"
+          fi
+          sudo ln -sf "$SRC" "$SDK/tools/bin/sdkmanager"
+          "$SDK/tools/bin/sdkmanager" --version || true
+
       - name: Install Qt (host tools + Android) via aqtinstall
         run: |
           python -m pip install "aqtinstall>=3.1.0"
