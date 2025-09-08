@@ -65,12 +65,14 @@ jobs:
           fetch_wheel() {
             local pkg_dir="$1"  # e.g. pyside6-addons or shiboken6
             local out_var="$2"  # variable name to export path into
-            local index_url="$BASE_URL/$pkg_dir/$PYSIDE_VER/"
+            local index_url="$BASE_URL/$pkg_dir/"
             echo "Fetching index: $index_url" >&2
             local wheel_name
             wheel_name=$(curl -fsSL "$index_url" | \
               grep -Eo '[^" ]+\.whl' | \
+              grep -E "${PYSIDE_VER}" | \
               grep -E "android_aarch64" | \
+              grep -E "cp311" | \
               head -n1 || true)
             if [ -z "${wheel_name:-}" ]; then
               echo "Could not find Android aarch64 wheel at $index_url" >&2
