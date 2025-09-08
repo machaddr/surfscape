@@ -70,8 +70,7 @@ jobs:
             local wheel_name
             wheel_name=$(curl -fsSL "$index_url" | \
               grep -Eo '[^" ]+\.whl' | \
-              grep -E 'android_aarch64' | \
-              grep -E 'abi3' | \
+              grep -E "android_aarch64" | \
               head -n1 || true)
             if [ -z "${wheel_name:-}" ]; then
               echo "Could not find Android aarch64 wheel at $index_url" >&2
@@ -83,7 +82,7 @@ jobs:
           }
           WHEEL_PYSIDE=""
           WHEEL_SHIBOKEN=""
-          fetch_wheel pyside6-addons WHEEL_PYSIDE
+          fetch_wheel pyside6 WHEEL_PYSIDE
           fetch_wheel shiboken6 WHEEL_SHIBOKEN
           echo "Wheels ready: $WHEEL_PYSIDE | $WHEEL_SHIBOKEN"
           pyside6-android-deploy \
