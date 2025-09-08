@@ -42,7 +42,7 @@ jobs:
 
       - name: Install PySide6 tooling
         run: |
-          pip install "PySide6==6.6.3" "PySide6-Addons==6.6.3" "shiboken6==6.6.3"
+          pip install PySide6 PySide6-Addons shiboken6
 
       - name: Build APK (PySide6 Android deploy)
         working-directory: android
@@ -55,9 +55,9 @@ jobs:
           mkdir -p dist-wheels
           python -m pip download --only-binary=:all: --no-deps -d dist-wheels \
             --platform android_aarch64 --python-version 311 --implementation cp --abi cp311 \
-            "PySide6-Addons==6.6.3" "shiboken6==6.6.3"
-          WHEEL_PYSIDE=$(ls dist-wheels/PySide6_Addons-6.6.3-*.whl | head -n1)
-          WHEEL_SHIBOKEN=$(ls dist-wheels/shiboken6-6.6.3-*.whl | head -n1)
+            PySide6-Addonsshiboken6
+          WHEEL_PYSIDE=$(ls dist-wheels/PySide6_Addons-*.whl | head -n1)
+          WHEEL_SHIBOKEN=$(ls dist-wheels/shiboken6-*.whl | head -n1)
           if [ ! -f "$WHEEL_PYSIDE" ] || [ ! -f "$WHEEL_SHIBOKEN" ]; then
             echo "Failed to download required Android wheels" >&2
             ls -l dist-wheels || true
