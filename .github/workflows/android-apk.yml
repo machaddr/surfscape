@@ -55,7 +55,7 @@ jobs:
           mkdir -p dist-wheels
           python -m pip download --only-binary=:all: --no-deps -d dist-wheels \
             --platform android_aarch64 --python-version 311 --implementation cp --abi cp311 \
-            PySide6-Addonsshiboken6
+            PySide6-Addons shiboken6
           WHEEL_PYSIDE=$(ls dist-wheels/PySide6_Addons-*.whl | head -n1)
           WHEEL_SHIBOKEN=$(ls dist-wheels/shiboken6-*.whl | head -n1)
           if [ ! -f "$WHEEL_PYSIDE" ] || [ ! -f "$WHEEL_SHIBOKEN" ]; then
