@@ -5,7 +5,11 @@
     "version": "1.0",
     "icon": "icon.png",
     "permissions": [
-      "INTERNET"
+      "INTERNET",
+      "ACCESS_NETWORK_STATE",
+      "WRITE_EXTERNAL_STORAGE",
+      "READ_EXTERNAL_STORAGE",
+      "FOREGROUND_SERVICE"
     ]
   },
   "qt": {
