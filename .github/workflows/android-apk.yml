@@ -109,8 +109,6 @@ jobs:
           echo "Wheels ready: $WHEEL_PYSIDE | $WHEEL_SHIBOKEN"
 
           pyside6-android-deploy \
-            --init \
-            -f \
             --name "Surfscape" \
             --sdk-path "$ANDROID_SDK_ROOT" \
             --ndk-path "$ANDROID_NDK_ROOT" \
@@ -118,11 +116,6 @@ jobs:
             --wheel-shiboken "$WHEEL_SHIBOKEN" \
             --keep-deployment-files \
             -v
-
-          pyside6-android-deploy \
-            --package com.surfscape.app \
-            --version 1.0 \
-            -v || { echo "Build phase failed" >&2; exit 1; }
 
           echo "APK artifacts:" && find . -name "*.apk" -o -name "*.aab"
 
