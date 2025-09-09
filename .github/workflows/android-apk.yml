@@ -119,6 +119,11 @@ jobs:
             --keep-deployment-files \
             -v
 
+          pyside6-android-deploy \
+            --package com.surfscape.app \
+            --version 1.0 \
+            -v || { echo "Build phase failed" >&2; exit 1; }
+
           echo "APK artifacts:" && find . -name "*.apk" -o -name "*.aab"
 
       - name: Upload artifact
