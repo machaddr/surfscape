@@ -59,6 +59,19 @@ def main():
 
     engine = QQmlApplicationEngine()
 
+    # Collect and print QML warnings (helps diagnose early exit on Android)
+    try:
+        def _on_warnings(warnings):  # type: ignore
+            for w in warnings:
+                try:
+                    msg = w.toString() if hasattr(w, 'toString') else str(w)
+                except Exception:  # pragma: no cover
+                    msg = str(w)
+                print("[QML WARNING]", msg, flush=True)
+        engine.warnings.connect(_on_warnings)  # type: ignore[attr-defined]
+    except Exception as e:  # pragma: no cover
+        print(f"[WARN] Could not hook QML warnings: {e}", flush=True)
+
     # Bridge for simple JSON persistence
     bridge = Bridge()
 
@@ -94,8 +107,12 @@ ApplicationWindow {
         component.create()
 
     if not engine.rootObjects():
+        print("[ERROR] No root QML objects loaded", flush=True)
         return 1
-    return app.exec()
+    code = app.exec()
+    if code != 0:
+        print(f"[INFO] App exited with code {code}", flush=True)
+    return code
 
 
 if __name__ == "__main__":

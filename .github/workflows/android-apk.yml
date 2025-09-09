@@ -71,12 +71,20 @@ jobs:
         run: |
           python -m pip install jinja2 pkginfo tqdm "packaging==24.1"
 
+      - name: Prepare Android assets (icon)
+        run: |
+          set -euo pipefail
+          cp icon/icon.png android/icon.png
+          ls -l android/icon.png
+
       - name: Build APK (PySide6 Android deploy)
         working-directory: android
         run: |
           export ANDROID_NDK_ROOT="$ANDROID_SDK_ROOT/ndk/27.1.12297006"
           export QT_HOST_PATH="/opt/Qt/6.9.2/gcc_64"
           export PATH="$QT_HOST_PATH/bin:$PATH"
+          export QT_LOGGING_RULES='qt.qml.warning=true;qt.webview.*=true'
+          export QT_DEBUG_PLUGINS=1
           # Download Android (arm64-v8a) wheels for PySide6 Addons and shiboken6 from Qt official releases
           set -euo pipefail
           PYSIDE_VER=6.9.2
