@@ -106,7 +106,7 @@ jobs:
           WHEEL_PYSIDE_ADDONS=""
           WHEEL_SHIBOKEN=""
           fetch_wheel pyside6 WHEEL_PYSIDE
-          fetch_wheel pyside6_addons WHEEL_PYSIDE_ADDONS
+          fetch_wheel pyside6-addons WHEEL_PYSIDE_ADDONS
           fetch_wheel shiboken6 WHEEL_SHIBOKEN
           echo "Wheels ready: $WHEEL_PYSIDE | $WHEEL_PYSIDE_ADDONS | $WHEEL_SHIBOKEN"
 
