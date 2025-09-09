@@ -123,10 +123,12 @@ jobs:
             --ndk-path "$ANDROID_NDK_ROOT" \
             --wheel-pyside "$WHEEL_PYSIDE" \
             --wheel-shiboken "$WHEEL_SHIBOKEN" \
+            --modules WebView \
             --keep-deployment-files \
             -v
 
           echo "APK artifacts:" && find . -name "*.apk" -o -name "*.aab"
+          echo "Listing packaged WebView libs (if any):" && find . -name 'libQt6WebView*' -o -name 'QtWebView*'
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
