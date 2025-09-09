@@ -103,10 +103,12 @@ jobs:
             eval "$out_var=dist-wheels/$wheel_name"
           }
           WHEEL_PYSIDE=""
+          WHEEL_PYSIDE_ADDONS=""
           WHEEL_SHIBOKEN=""
           fetch_wheel pyside6 WHEEL_PYSIDE
+          fetch_wheel pyside6_addons WHEEL_PYSIDE_ADDONS
           fetch_wheel shiboken6 WHEEL_SHIBOKEN
-          echo "Wheels ready: $WHEEL_PYSIDE | $WHEEL_SHIBOKEN"
+          echo "Wheels ready: $WHEEL_PYSIDE | $WHEEL_PYSIDE_ADDONS | $WHEEL_SHIBOKEN"
 
           pyside6-android-deploy \
             -f \
@@ -114,6 +116,7 @@ jobs:
             --sdk-path "$ANDROID_SDK_ROOT" \
             --ndk-path "$ANDROID_NDK_ROOT" \
             --wheel-pyside "$WHEEL_PYSIDE" \
+            --wheel-pyside-addons "$WHEEL_PYSIDE_ADDONS" \
             --wheel-shiboken "$WHEEL_SHIBOKEN" \
             --keep-deployment-files \
             -v
