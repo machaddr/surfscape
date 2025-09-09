@@ -6,7 +6,6 @@ import sys
 from PySide6.QtCore import QUrl, QObject, Slot, Signal, QStandardPaths
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine, QQmlComponent
-from PySide6.QtWebView import initialize as webview_initialize
 
 
 class Bridge(QObject):
@@ -56,8 +55,7 @@ def main():
 
     app = QGuiApplication(sys.argv)
 
-    # Required for Qt WebView on Android
-    webview_initialize()
+    # Qt WebView: Python initialize call removed; QML import triggers loading on Android.
 
     engine = QQmlApplicationEngine()
 
