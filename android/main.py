@@ -10,7 +10,6 @@ os.environ.setdefault("QT_DEBUG_PLUGINS", "1")
 from PySide6.QtCore import QUrl, QObject, Slot, Signal, QStandardPaths, qInstallMessageHandler, QtMsgType
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine, QQmlComponent
-from PySide6.QtWebView import QtWebView
 import traceback
 import time
 import logging
@@ -62,13 +61,7 @@ def main():
     QGuiApplication.setOrganizationName("Surfscape")
 
     app = QGuiApplication(sys.argv)
-
-    # Initialize Qt WebView explicitly (required on some Android devices)
-    try:
-        QtWebView.initialize()
-    except Exception as e:
-        print(f"[WARN] QtWebView.initialize() failed: {e}", flush=True)
-
+    
     engine = QQmlApplicationEngine()
 
     # Collect and print QML warnings (helps diagnose early exit on Android)
@@ -144,8 +137,8 @@ def main():
     else:
         # Fallback inline QML with simple WebView
         qml = """
-import QtQuick 2.15
-import QtQuick.Controls 2.15
+import QtQuick
+import QtQuick.Controls
 import QtWebView
 
 ApplicationWindow {
@@ -157,9 +150,9 @@ ApplicationWindow {
     WebView { anchors.fill: parent; url: initialUrl }
 }
 """
-        component = QQmlComponent(engine)
-        component.setData(bytes(qml, "utf-8"), QUrl("qrc:/Inline.qml"))
-        component.create()
+    component = QQmlComponent(engine)
+    component.setData(bytes(qml, "utf-8"), QUrl("qrc:/Inline.qml"))
+    component.create()
 
     if not engine.rootObjects():
         print("[ERROR] No root QML objects loaded", flush=True)
