@@ -4503,6 +4503,12 @@ class Browser(QMainWindow):
 
     def show_settings_dialog(self):
         dialog = AdvancedSettingsDialog(self.settings_manager, self)
+        try:
+            # Attempt true fullscreen
+            dialog.showFullScreen()
+        except Exception:
+            # Fallback to maximized if fullscreen not supported
+            dialog.showMaximized()
         dialog.exec()
         
     def set_homepage(self, homepage_url):
