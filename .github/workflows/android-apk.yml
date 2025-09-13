@@ -277,15 +277,80 @@ jobs:
           fi
           BUNDLETOOL_VERSION=1.16.0
           curl -L -o bundletool.jar "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
-          java -jar bundletool.jar build-apks --bundle="${AAB_FILE}" --mode=universal --output=Surfscape-universal.apks
-          unzip -p Surfscape-universal.apks universal.apk > Surfscape-universal-temp.apk || true
-          if [ -s Surfscape-universal-temp.apk ]; then
-            mv Surfscape-universal-temp.apk Surfscape-universal.apk
-            echo "Universal APK extracted: Surfscape-universal.apk"
+
+          echo "--- Keystore setup ---"
+          # If release keystore secrets are provided, use them, else generate a debug keystore
+          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "Decoding release keystore from secret"
+            echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > release.keystore
+            KS_PATH=release.keystore
+            KS_ALIAS='${{ secrets.ANDROID_KEY_ALIAS }}'
+            KS_STORE_PASS='${{ secrets.ANDROID_KEYSTORE_PASSWORD }}'
+            KS_KEY_PASS='${{ secrets.ANDROID_KEY_PASSWORD }}'
           else
-            echo "Failed to extract universal.apk from APKS archive." >&2
+            echo "Creating debug keystore (no release secrets present)"
+            keytool -genkeypair -noprompt \
+              -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android,O=Android,C=US" \
+              -storepass android -keypass android \
+              -keystore debug.keystore
+            KS_PATH=debug.keystore
+            KS_ALIAS=androiddebugkey
+            KS_STORE_PASS=android
+            KS_KEY_PASS=android
           fi
+
+          echo "Building signed universal .apks archive via bundletool"
+          java -jar bundletool.jar build-apks \
+            --bundle="${AAB_FILE}" \
+            --mode=universal \
+            --output=Surfscape-universal.apks \
+            --ks="$KS_PATH" \
+            --ks-key-alias="$KS_ALIAS" \
+            --ks-pass=pass:$KS_STORE_PASS \
+            --key-pass=pass:$KS_KEY_PASS
+
+          echo "Extracting universal APK"
+          unzip -p Surfscape-universal.apks universal.apk > Surfscape-universal-unsigned.apk || true
+          if [ ! -s Surfscape-universal-unsigned.apk ]; then
+            echo "Failed to extract universal.apk from APKS archive." >&2
+            exit 1
+          fi
+
+          # Align + (re)sign extracted APK explicitly (some devices are strict)
+          BUILD_TOOLS_DIR=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* 2>/dev/null | sort -Vr | head -n1)
+          ZIPALIGN="$BUILD_TOOLS_DIR/zipalign"
+          APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
+          if [ ! -x "$ZIPALIGN" ]; then echo "zipalign not found" >&2; exit 1; fi
+          if [ ! -x "$APKSIGNER" ]; then echo "apksigner not found" >&2; exit 1; fi
+          echo "Aligning APK"
+          "$ZIPALIGN" -p -f 4 Surfscape-universal-unsigned.apk Surfscape-universal-aligned.apk
+          echo "Signing APK"
+          "$APKSIGNER" sign --ks "$KS_PATH" --ks-key-alias "$KS_ALIAS" \
+            --ks-pass pass:$KS_STORE_PASS --key-pass pass:$KS_KEY_PASS \
+            --out Surfscape-universal-signed.apk Surfscape-universal-aligned.apk
+          echo "Verifying signature"
+          "$APKSIGNER" verify -v Surfscape-universal-signed.apk || { echo "Signature verification failed" >&2; exit 1; }
+          mv Surfscape-universal-signed.apk Surfscape-universal.apk
+          echo "Final universal APK: Surfscape-universal.apk"
           ls -l *.aab *.apks *.apk 2>/dev/null || true
+
+      - name: Verify produced APK(s) metadata
+        working-directory: android
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS_DIR=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* 2>/dev/null | sort -Vr | head -n1)
+            AAPT="$BUILD_TOOLS_DIR/aapt"; if [ ! -x "$AAPT" ]; then AAPT="$BUILD_TOOLS_DIR/aapt2"; fi
+          if ls *.apk >/dev/null 2>&1; then
+            for f in *.apk; do
+              echo "\n== $f =="
+              if command -v file >/dev/null 2>&1; then file "$f"; fi
+              if [ -x "$AAPT" ]; then "$AAPT" dump badging "$f" | head -n40 || true; fi
+            done
+          else
+            echo "No APK files found for verification." >&2
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
