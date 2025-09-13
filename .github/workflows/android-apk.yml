@@ -48,13 +48,33 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x android/gradlew
 
+      - name: Resolve GeckoView Version
+        id: geckoview_version
+        run: |
+          set -e
+          META_URL="https://maven.mozilla.org/maven2/org/mozilla/geckoview/geckoview/maven-metadata.xml"
+          echo "Fetching $META_URL" >&2
+          curl -sS "$META_URL" -o meta.xml
+          # Extract latest release version (not snapshot) using grep/sed (simple XML parse)
+          latest=$(grep -oE '<version>[0-9]+\.[0-9]+(\.[0-9]+)?</version>' meta.xml | sed -E 's#</?version>##g' | grep -Ev '(alpha|beta|SNAPSHOT)' | sort -V | tail -n1)
+          if [ -z "$latest" ]; then
+            echo "Failed to resolve GeckoView version" >&2
+            exit 1
+          fi
+          echo "Resolved GeckoView version: $latest"
+          echo "GECKOVIEW_VERSION=$latest" >> $GITHUB_ENV
+          echo "version=$latest" >> $GITHUB_OUTPUT
+
+      - name: Show Selected GeckoView Version
+        run: echo "Using GeckoView version $GECKOVIEW_VERSION"
+
       - name: Build Debug APK
         working-directory: android
-        run: ./gradlew assembleDebug --stacktrace
+        run: GECKOVIEW_VERSION=${{ steps.geckoview_version.outputs.version }} ./gradlew assembleDebug --stacktrace
 
       - name: Build Release APK (unsigned)
         working-directory: android
-        run: ./gradlew assembleRelease --stacktrace
+        run: GECKOVIEW_VERSION=${{ steps.geckoview_version.outputs.version }} ./gradlew assembleRelease --stacktrace
 
       - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4

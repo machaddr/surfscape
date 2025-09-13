@@ -3,7 +3,13 @@ plugins {
     id("org.jetbrains.kotlin.android") version "1.9.24" apply false
 }
 
-// GeckoView version alignment (ensure matching major/minor for arm64-v8a, x86_64 etc.)
-// Use a stable GeckoView release version (match major Firefox ESR/Release version)
-// See: https://maven.mozilla.org/maven2/org/mozilla/geckoview/geckoview/
-extra["geckoviewVersion"] = "130.0.1"
+// GeckoView version selection: allow CI/user override via GECKOVIEW_VERSION env, fallback sequence.
+val fallbackGeckoVersions = listOf(
+    "132.0", // try latest release (update periodically)
+    "131.0",
+    "130.0",
+    "129.0"
+)
+val envOverride = System.getenv("GECKOVIEW_VERSION")?.trim().orEmpty()
+// Prefer explicit override; otherwise first fallback (actual existence is checked in workflow fetch step).
+extra["geckoviewVersion"] = (if (envOverride.isNotBlank()) envOverride else fallbackGeckoVersions.first())
