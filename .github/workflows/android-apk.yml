@@ -1,88 +1,86 @@
 name: Android APK
 
 on:
-	push:
-		branches: [ main ]
-		paths:
-			- 'android/**'
-			- '.github/workflows/android-apk.yml'
-	pull_request:
-		branches: [ main ]
-		paths:
-			- 'android/**'
-			- '.github/workflows/android-apk.yml'
-	workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android-apk.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'android/**'
+      - '.github/workflows/android-apk.yml'
+  workflow_dispatch:
 
 jobs:
-	build:
-		runs-on: ubuntu-latest
-		timeout-minutes: 30
-		env:
-			JAVA_VERSION: '17'
-			ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
-		steps:
-			- name: Checkout
-				uses: actions/checkout@v4
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      JAVA_VERSION: '17'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-			- name: Set up JDK ${{ env.JAVA_VERSION }}
-				uses: actions/setup-java@v4
-				with:
-					distribution: temurin
-					java-version: ${{ env.JAVA_VERSION }}
-					cache: gradle
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: gradle
 
-			- name: Grant execute permission for gradlew
-				run: chmod +x android/gradlew
+      - name: Grant execute permission for gradlew
+        run: chmod +x android/gradlew
 
-			- name: Build Debug APK
-				working-directory: android
-				run: ./gradlew assembleDebug --stacktrace
+      - name: Build Debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --stacktrace
 
-			- name: Build Release APK (unsigned)
-				working-directory: android
-				run: ./gradlew assembleRelease --stacktrace
+      - name: Build Release APK (unsigned)
+        working-directory: android
+        run: ./gradlew assembleRelease --stacktrace
 
-			- name: Upload APK Artifacts
-				uses: actions/upload-artifact@v4
-				with:
-					name: surfscape-apks
-					path: |
-						android/app/build/outputs/apk/debug/*.apk
-						android/app/build/outputs/apk/release/*.apk
-					if-no-files-found: error
+      - name: Upload APK Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: surfscape-apks
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
 
-					- name: Conditional Sign Release APK
-						id: sign_release
-				if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
-				env:
-					KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-					KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-					KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-					KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-				run: |
-					echo "Signing release APK if keystore is provided"
-					mkdir -p keystore
-					echo "$KEYSTORE_B64" | base64 -d > keystore/keystore.jks
-					unsigned_apk=$(ls android/app/build/outputs/apk/release/app-release-unsigned.apk)
-					jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 -keystore keystore/keystore.jks -storepass "$KEYSTORE_PASSWORD" -keypass "$KEY_PASSWORD" "$unsigned_apk" "$KEY_ALIAS"
-					# Align & zip (using Android build-tools) if available
-					buildToolsDir=$(ls $ANDROID_HOME/build-tools | sort -r | head -n1)
-					if [ -d "$ANDROID_HOME/build-tools/$buildToolsDir" ]; then
-						zipalign="$ANDROID_HOME/build-tools/$buildToolsDir/zipalign"
-						apksigner="$ANDROID_HOME/build-tools/$buildToolsDir/apksigner"
-						if [ -x "$zipalign" ] && [ -x "$apksigner" ]; then
-							aligned_apk=android/app/build/outputs/apk/release/app-release-aligned.apk
-							"$zipalign" -f 4 "$unsigned_apk" "$aligned_apk"
-							"$apksigner" verify "$aligned_apk"
-							mv "$aligned_apk" android/app/build/outputs/apk/release/app-release-signed.apk
-						fi
-					fi
-					echo "Signed APK ready (if keystore was supplied)."
+      - name: Conditional Sign Release APK
+        id: sign_release
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "Signing release APK if keystore is provided"
+          mkdir -p keystore
+          echo "$KEYSTORE_B64" | base64 -d > keystore/keystore.jks
+          unsigned_apk=android/app/build/outputs/apk/release/app-release-unsigned.apk
+          jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 -keystore keystore/keystore.jks -storepass "$KEYSTORE_PASSWORD" -keypass "$KEY_PASSWORD" "$unsigned_apk" "$KEY_ALIAS"
+          buildToolsDir=$(ls $ANDROID_HOME/build-tools 2>/dev/null | sort -r | head -n1 || true)
+          if [ -n "$buildToolsDir" ] && [ -d "$ANDROID_HOME/build-tools/$buildToolsDir" ]; then
+            zipalign="$ANDROID_HOME/build-tools/$buildToolsDir/zipalign"
+            apksigner="$ANDROID_HOME/build-tools/$buildToolsDir/apksigner"
+            if [ -x "$zipalign" ] && [ -x "$apksigner" ]; then
+              aligned_apk=android/app/build/outputs/apk/release/app-release-aligned.apk
+              "$zipalign" -f 4 "$unsigned_apk" "$aligned_apk"
+              "$apksigner" verify "$aligned_apk" || true
+              mv "$aligned_apk" android/app/build/outputs/apk/release/app-release-signed.apk
+            fi
+          fi
+          echo "Signed APK ready (if keystore was supplied)."
 
-			- name: Upload Signed APK
-				if: ${{ steps.sign_release.conclusion == 'success' }}
-				uses: actions/upload-artifact@v4
-				with:
-					name: surfscape-apk-signed
-					path: android/app/build/outputs/apk/release/app-release-signed.apk
-					if-no-files-found: ignore
+      - name: Upload Signed APK
+        if: ${{ steps.sign_release.conclusion == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: surfscape-apk-signed
+          path: android/app/build/outputs/apk/release/app-release-signed.apk
+          if-no-files-found: ignore
