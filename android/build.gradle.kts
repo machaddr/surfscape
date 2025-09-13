@@ -4,4 +4,6 @@ plugins {
 }
 
 // GeckoView version alignment (ensure matching major/minor for arm64-v8a, x86_64 etc.)
-extra["geckoviewVersion"] = "126.0.20240611092435" // Example (corresponds to Firefox 126 nightly build id). Adjust to stable if desired.
+// Use a stable GeckoView release version (match major Firefox ESR/Release version)
+// See: https://maven.mozilla.org/maven2/org/mozilla/geckoview/geckoview/
+extra["geckoviewVersion"] = "130.0.1"
