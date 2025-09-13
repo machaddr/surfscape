@@ -52,17 +52,27 @@ jobs:
 
       - name: Conditional Sign Release APK
         id: sign_release
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          echo "Signing release APK if keystore is provided"
+          set -e
+          if [ -z "${KEYSTORE_B64}" ] || [ -z "${KEY_ALIAS}" ]; then
+            echo "No signing secrets present; skipping signing." 
+            echo "signed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          echo "Signing release APK with provided keystore" 
           mkdir -p keystore
           echo "$KEYSTORE_B64" | base64 -d > keystore/keystore.jks
           unsigned_apk=android/app/build/outputs/apk/release/app-release-unsigned.apk
+          if [ ! -f "$unsigned_apk" ]; then
+            echo "Unsigned release APK not found: $unsigned_apk" >&2
+            echo "signed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
           jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 -keystore keystore/keystore.jks -storepass "$KEYSTORE_PASSWORD" -keypass "$KEY_PASSWORD" "$unsigned_apk" "$KEY_ALIAS"
           buildToolsDir=$(ls $ANDROID_HOME/build-tools 2>/dev/null | sort -r | head -n1 || true)
           if [ -n "$buildToolsDir" ] && [ -d "$ANDROID_HOME/build-tools/$buildToolsDir" ]; then
@@ -75,10 +85,15 @@ jobs:
               mv "$aligned_apk" android/app/build/outputs/apk/release/app-release-signed.apk
             fi
           fi
-          echo "Signed APK ready (if keystore was supplied)."
+          if [ -f android/app/build/outputs/apk/release/app-release-signed.apk ]; then
+            echo "Signed APK ready." 
+            echo "signed=true" >> $GITHUB_OUTPUT
+          else
+            echo "signed=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload Signed APK
-        if: ${{ steps.sign_release.conclusion == 'success' }}
+        if: ${{ steps.sign_release.outputs.signed == 'true' }}
         uses: actions/upload-artifact@v4
         with:
           name: surfscape-apk-signed
