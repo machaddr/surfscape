@@ -16,6 +16,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var geckoSession: GeckoSession
     private lateinit var runtime: GeckoRuntime
 
+    private var canGoBackFlag = false
+    private var canGoForwardFlag = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -29,6 +32,17 @@ class MainActivity : AppCompatActivity() {
 
         runtime = (application as SurfscapeApp).runtime
         geckoSession = GeckoSession()
+        geckoSession.setNavigationDelegate(object : GeckoSession.NavigationDelegate {
+            override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
+                canGoBackFlag = canGoBack
+                findViewById<ImageButton>(R.id.btnBack).isEnabled = canGoBack
+            }
+
+            override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
+                canGoForwardFlag = canGoForward
+                findViewById<ImageButton>(R.id.btnForward).isEnabled = canGoForward
+            }
+        })
         geckoSession.open(runtime)
         geckoView.setSession(geckoSession)
 
@@ -40,8 +54,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnGo.setOnClickListener { loadUrl(urlBar.text.toString()) }
-        btnBack.setOnClickListener { if (geckoSession.canGoBack()) geckoSession.goBack() }
-        btnForward.setOnClickListener { if (geckoSession.canGoForward()) geckoSession.goForward() }
+        btnBack.isEnabled = false
+        btnForward.isEnabled = false
+        btnBack.setOnClickListener { if (canGoBackFlag) geckoSession.goBack() }
+        btnForward.setOnClickListener { if (canGoForwardFlag) geckoSession.goForward() }
         btnReload.setOnClickListener { geckoSession.reload() }
 
         urlBar.setOnEditorActionListener { _, actionId, event ->
@@ -56,7 +72,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onBackPressed() {
-        if (this::geckoSession.isInitialized && geckoSession.canGoBack()) {
+        if (this::geckoSession.isInitialized && canGoBackFlag) {
             geckoSession.goBack()
         } else {
             super.onBackPressed()
