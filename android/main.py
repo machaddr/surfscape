@@ -6,11 +6,15 @@ import sys
 # Ensure unbuffered IO and verbose Qt plugin logging to help diagnose Android startup issues
 os.environ.setdefault("PYTHONUNBUFFERED", "1")
 os.environ.setdefault("QT_DEBUG_PLUGINS", "1")
+# Rendering fallbacks: uncomment if GPU/driver crash persists on emulator
+os.environ.setdefault("QT_OPENGL", "angle")  # use ANGLE (D3D/OpenGL ES translation) if available
+# os.environ.setdefault("QT_QUICK_BACKEND", "software")  # last resort: software renderer
 
 from PySide6.QtCore import QUrl, QObject, Slot, Signal, QStandardPaths, qInstallMessageHandler, QtMsgType
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine, QQmlComponent
 from PySide6 import QtNetwork
+from PySide6 import QtWebView
 import traceback
 import time
 import logging
@@ -60,6 +64,12 @@ def main():
     # Note: This is an Android-friendly preview of Surfscape, not feature-parity.
     QGuiApplication.setApplicationName("Surfscape")
     QGuiApplication.setOrganizationName("Surfscape")
+
+    # Must initialize QtWebView before creating QML engine on Android
+    try:
+        QtWebView.initialize()
+    except Exception:
+        pass
 
     app = QGuiApplication(sys.argv)
     
@@ -136,8 +146,8 @@ def main():
     if os.path.exists(qml_path):
         engine.load(QUrl.fromLocalFile(qml_path))
     else:
-        # Fallback inline QML with simple WebView
-        qml = """
+        # Fallback inline QML with simple WebView (only if file missing)
+        inline_qml = """
 import QtQuick
 import QtQuick.Controls
 import QtWebView
@@ -151,9 +161,9 @@ ApplicationWindow {
     WebView { anchors.fill: parent; url: initialUrl }
 }
 """
-    component = QQmlComponent(engine)
-    component.setData(bytes(qml, "utf-8"), QUrl("qrc:/Inline.qml"))
-    component.create()
+        component = QQmlComponent(engine)
+        component.setData(inline_qml.encode("utf-8"), QUrl("qrc:/Inline.qml"))
+        component.create()
 
     if not engine.rootObjects():
         print("[ERROR] No root QML objects loaded", flush=True)
