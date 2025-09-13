@@ -139,6 +139,44 @@ jobs:
           echo 'Directory tree (limited):'
           find . -maxdepth 4 -type d -printf '%p\n'
 
+      - name: Normalize launcher icons for Gradle build
+        working-directory: android
+        run: |
+          set -euo pipefail
+          # Only proceed if a Gradle wrapper exists (otherwise skip silently)
+          GRADLE_FILE=$(find ./deployment -maxdepth 8 -type f -name gradlew -printf '%p\n' | head -n1 || true)
+          if [ -z "${GRADLE_FILE}" ]; then
+            echo "No Gradle project; skipping icon normalization."; exit 0; fi
+          # Ensure ImageMagick
+          if ! command -v convert >/dev/null 2>&1; then
+            sudo apt-get update -y && sudo apt-get install -y imagemagick
+          fi
+          SRC_ICON="icon.png"
+          if [ ! -f "$SRC_ICON" ]; then
+            # fallback to root icon if copied earlier
+            if [ -f ../icon.png ]; then SRC_ICON=../icon.png; fi
+          fi
+          if [ ! -f "$SRC_ICON" ]; then echo "No source icon found"; exit 0; fi
+          GRADLE_DIR=$(dirname "$GRADLE_FILE")
+          RES_DIR="$GRADLE_DIR/src/main/res"
+          mkdir -p "$RES_DIR"
+          # Densities and target sizes (square)
+          set +u
+          for spec in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+            dens=${spec%%:*}; size=${spec##*:};
+            outdir="$RES_DIR/mipmap-$dens"; mkdir -p "$outdir";
+            convert "$SRC_ICON" -resize ${size}x${size} -gravity center -background none -extent ${size}x${size} "$outdir/ic_launcher.png";
+            cp "$outdir/ic_launcher.png" "$outdir/ic_launcher_round.png" || true;
+          done
+          set -u
+          # Anydpi adaptive (use largest existing)
+          ADAPTIVE_DIR="$RES_DIR/mipmap-anydpi-v26"; mkdir -p "$ADAPTIVE_DIR"
+          cp "$RES_DIR/mipmap-xxxhdpi/ic_launcher.png" "$ADAPTIVE_DIR/ic_launcher.png" || true
+          cp "$RES_DIR/mipmap-xxxhdpi/ic_launcher.png" "$ADAPTIVE_DIR/ic_launcher_round.png" || true
+          # Remove or downscale oversized single icon if present in plain mipmap/
+          if [ -f "$RES_DIR/mipmap/icon.png" ]; then rm -f "$RES_DIR/mipmap/icon.png" || true; fi
+          echo "Generated launcher icons:" && find "$RES_DIR" -maxdepth 2 -type f -name 'ic_launcher*.png' -printf '%p\n'
+
       - name: Attempt AAB build via Gradle (best-effort)
         working-directory: android
         run: |
