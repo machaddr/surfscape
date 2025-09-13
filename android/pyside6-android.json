@@ -1,7 +1,7 @@
 {
   "application": {
     "name": "Surfscape",
-    "package": "org.surfscape.browser",
+    "package": "org.surfscape.surfscape",
     "version": "1.0",
     "icon": "icon.png",
     "permissions": [
@@ -17,7 +17,10 @@
       "quicklayouts",
       "quickdialogs2",
       "webview",
-      "network"
+      "network",
+      "gui",
+      "opengl",
+      "shadertools"
     ],
     "features": []
   },
