@@ -4064,6 +4064,15 @@ class Browser(QMainWindow):
             history_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
             history_list.setMinimumWidth(420)
             history_list.setMaximumHeight(300)
+            # Enable hover selection
+            try:
+                history_list.setMouseTracking(True)
+                def _history_item_entered(item):
+                    if item is not None:
+                        history_list.setCurrentItem(item)
+                history_list.itemEntered.connect(_history_item_entered)
+            except Exception:
+                pass
 
             def populate_history(filter_text: str = ""):
                 history_list.clear()
@@ -4150,6 +4159,15 @@ class Browser(QMainWindow):
             bookmarks_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
             bookmarks_list.setMinimumWidth(420)
             bookmarks_list.setMaximumHeight(300)
+            # Enable hover selection
+            try:
+                bookmarks_list.setMouseTracking(True)
+                def _bookmark_item_entered(item):
+                    if item is not None:
+                        bookmarks_list.setCurrentItem(item)
+                bookmarks_list.itemEntered.connect(_bookmark_item_entered)
+            except Exception:
+                pass
 
             def populate_bookmarks(filter_text: str = ""):
                 bookmarks_list.clear()
@@ -4315,6 +4333,15 @@ class Browser(QMainWindow):
             cookies_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
             cookies_list.setMinimumWidth(420)
             cookies_list.setMaximumHeight(300)
+            # Enable hover selection
+            try:
+                cookies_list.setMouseTracking(True)
+                def _cookies_item_entered(item):
+                    if item is not None:
+                        cookies_list.setCurrentItem(item)
+                cookies_list.itemEntered.connect(_cookies_item_entered)
+            except Exception:
+                pass
 
             for cookie in self.cookies:
                 name = cookie.get('name', '')
