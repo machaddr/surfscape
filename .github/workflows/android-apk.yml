@@ -128,6 +128,38 @@ jobs:
 
           echo "APK artifacts:" && find . -name "*.apk" -o -name "*.aab"
 
+      - name: Inspect deployment directories
+        working-directory: android
+        run: |
+          set -euo pipefail
+          echo 'Top-level:'
+          ls -al . || true
+          echo 'Find gradlew (depth 8):'
+          find . -maxdepth 8 -type f -name gradlew -printf '%p\n' || true
+          echo 'Directory tree (limited):'
+          find . -maxdepth 4 -type d -printf '%p\n'
+
+      - name: Attempt AAB build via Gradle (best-effort)
+        working-directory: android
+        run: |
+          set -euo pipefail
+          GRADLE_FILE=$(find . -maxdepth 8 -type f -name gradlew -printf '%p\n' | head -n1 || true)
+          if [ -z "${GRADLE_FILE}" ]; then
+            echo "No Gradle wrapper produced by pyside6-android-deploy; AAB build not supported in this version." >&2
+            exit 0
+          fi
+          GRADLE_DIR=$(dirname "$GRADLE_FILE")
+          echo "Using Gradle wrapper at: $GRADLE_FILE"
+          chmod +x "$GRADLE_FILE"
+          (cd "$GRADLE_DIR" && ./gradlew --no-daemon bundleRelease)
+          AAB_OUT=$(find "$GRADLE_DIR" -path '*/build/outputs/bundle/*/*.aab' | head -n1 || true)
+          if [ -n "${AAB_OUT}" ]; then
+            echo "AAB built: ${AAB_OUT}"
+            cp "$AAB_OUT" ./Surfscape-release.aab || cp "$AAB_OUT" ../Surfscape-release.aab || true
+          else
+            echo "Gradle executed but no AAB located." >&2
+          fi
+
       - name: Build AAB via Gradle (if project generated)
         working-directory: android
         run: |
