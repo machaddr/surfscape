@@ -50,10 +50,28 @@ android {
 
 val geckoviewVersion: String by rootProject.extra
 
-repositories {
-    google()
-    mavenCentral()
-    maven("https://maven.mozilla.org/maven2/")
+// Automatically copy root icon/icon.png into launcher mipmap folders if present.
+val surfscapeIcon: File = rootProject.file("icon/icon.png")
+if (surfscapeIcon.exists()) {
+    val densities = listOf("mdpi" to 48, "hdpi" to 72, "xhdpi" to 96, "xxhdpi" to 144, "xxxhdpi" to 192)
+    densities.forEach { (density, _) ->
+        tasks.register<Copy>("copyLauncherIcon_${density}") {
+            from(surfscapeIcon)
+            into(layout.projectDirectory.dir("src/main/res/mipmap-${density}"))
+            rename { "ic_launcher.png" }
+        }
+    }
+    // Adaptive foreground (same base image; ideally provide a 432x432 asset for best quality)
+    tasks.register<Copy>("copyAdaptiveForeground") {
+        from(surfscapeIcon)
+        into(layout.projectDirectory.dir("src/main/res/mipmap-anydpi-v26"))
+        rename { "ic_launcher_foreground.png" }
+    }
+    // Ensure copy tasks run before resource merging
+    tasks.matching { it.name == "preBuild" }.configureEach {
+        dependsOn(tasks.withType<Copy>().matching { it.name.startsWith("copyLauncherIcon_") })
+        dependsOn("copyAdaptiveForeground")
+    }
 }
 
 dependencies {
