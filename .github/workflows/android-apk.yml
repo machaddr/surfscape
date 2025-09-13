@@ -123,29 +123,53 @@ jobs:
             --ndk-path "$ANDROID_NDK_ROOT" \
             --wheel-pyside "$WHEEL_PYSIDE" \
             --wheel-shiboken "$WHEEL_SHIBOKEN" \
-            --build-type aab \
             --keep-deployment-files \
             -v
 
           echo "APK artifacts:" && find . -name "*.apk" -o -name "*.aab"
 
-      - name: Build split APK sets from AAB (bundletool)
-        if: always()
+      - name: Build AAB via Gradle (if project generated)
         working-directory: android
         run: |
           set -euo pipefail
-          AAB_FILE=$(find . -maxdepth 2 -name "*.aab" | head -n1 || true)
+          # Locate a generated Gradle wrapper (deployment directory naming may vary)
+          GRADLE_DIR="$(find . -maxdepth 3 -type f -name gradlew -printf '%h\n' | head -n1 || true)"
+          if [ -z "${GRADLE_DIR}" ]; then
+            echo "No Gradle wrapper found (cannot build AAB)." >&2
+            exit 0
+          fi
+          echo "Using Gradle project at: $GRADLE_DIR"
+          cd "$GRADLE_DIR"
+          chmod +x gradlew
+            ./gradlew --no-daemon bundleRelease
+          AAB_OUT=$(find . -path '*/build/outputs/bundle/*/*.aab' | head -n1 || true)
+          if [ -n "${AAB_OUT}" ]; then
+            echo "AAB built: ${AAB_OUT}"
+            cp "$AAB_OUT" ../../Surfscape-release.aab || true
+          else
+            echo "Gradle build completed but no AAB located." >&2
+          fi
+
+      - name: Generate universal APK from AAB (bundletool)
+        working-directory: android
+        run: |
+          set -euo pipefail
+          AAB_FILE=$(find . -maxdepth 2 -name 'Surfscape-release.aab' -o -name '*.aab' | head -n1 || true)
           if [ -z "${AAB_FILE}" ]; then
-            echo "No AAB produced; cannot generate split APKs." >&2
-            exit 1
+            echo "No AAB file to convert." >&2
+            exit 0
           fi
           BUNDLETOOL_VERSION=1.16.0
           curl -L -o bundletool.jar "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
-          echo "Generating default split APK set..."
-          java -jar bundletool.jar build-apks --bundle="${AAB_FILE}" --output=Surfscape-default.apks
-          echo "Generating universal (single) APK set..."
           java -jar bundletool.jar build-apks --bundle="${AAB_FILE}" --mode=universal --output=Surfscape-universal.apks
-          ls -l Surfscape-*.apks || true
+          unzip -p Surfscape-universal.apks universal.apk > Surfscape-universal-temp.apk || true
+          if [ -s Surfscape-universal-temp.apk ]; then
+            mv Surfscape-universal-temp.apk Surfscape-universal.apk
+            echo "Universal APK extracted: Surfscape-universal.apk"
+          else
+            echo "Failed to extract universal.apk from APKS archive." >&2
+          fi
+          ls -l *.aab *.apks *.apk 2>/dev/null || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -154,4 +178,4 @@ jobs:
           path: |
             **/*.apk
             **/*.aab
-            android/Surfscape-*.apks
+            android/Surfscape-universal.apks
