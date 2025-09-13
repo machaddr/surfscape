@@ -3,13 +3,5 @@ plugins {
     id("org.jetbrains.kotlin.android") version "2.0.21" apply false
 }
 
-// GeckoView version selection: allow CI/user override via GECKOVIEW_VERSION env, fallback sequence.
-val fallbackGeckoVersions = listOf(
-    "132.0", // try latest release (update periodically)
-    "131.0",
-    "130.0",
-    "129.0"
-)
-val envOverride = System.getenv("GECKOVIEW_VERSION")?.trim().orEmpty()
-// Prefer explicit override; otherwise first fallback (actual existence is checked in workflow fetch step).
-extra["geckoviewVersion"] = (if (envOverride.isNotBlank()) envOverride else fallbackGeckoVersions.first())
+// Pinned GeckoView version (update manually as needed)
+extra["geckoviewVersion"] = "129.0"
