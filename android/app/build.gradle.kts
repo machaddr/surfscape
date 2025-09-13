@@ -75,7 +75,7 @@ if (surfscapeIcon.exists()) {
 }
 
 dependencies {
-    implementation(platform("org.jetbrains.kotlin:kotlin-bom:2.0.21"))
+    implementation(platform("org.jetbrains.kotlin:kotlin-bom:2.2.0"))
     implementation("org.mozilla.geckoview:geckoview:$geckoviewVersion")
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
