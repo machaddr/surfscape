@@ -123,10 +123,29 @@ jobs:
             --ndk-path "$ANDROID_NDK_ROOT" \
             --wheel-pyside "$WHEEL_PYSIDE" \
             --wheel-shiboken "$WHEEL_SHIBOKEN" \
+            --build-type aab \
             --keep-deployment-files \
             -v
 
           echo "APK artifacts:" && find . -name "*.apk" -o -name "*.aab"
+
+      - name: Build split APK sets from AAB (bundletool)
+        if: always()
+        working-directory: android
+        run: |
+          set -euo pipefail
+          AAB_FILE=$(find . -maxdepth 2 -name "*.aab" | head -n1 || true)
+          if [ -z "${AAB_FILE}" ]; then
+            echo "No AAB produced; cannot generate split APKs." >&2
+            exit 1
+          fi
+          BUNDLETOOL_VERSION=1.16.0
+          curl -L -o bundletool.jar "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
+          echo "Generating default split APK set..."
+          java -jar bundletool.jar build-apks --bundle="${AAB_FILE}" --output=Surfscape-default.apks
+          echo "Generating universal (single) APK set..."
+          java -jar bundletool.jar build-apks --bundle="${AAB_FILE}" --mode=universal --output=Surfscape-universal.apks
+          ls -l Surfscape-*.apks || true
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -135,3 +154,4 @@ jobs:
           path: |
             **/*.apk
             **/*.aab
+            android/Surfscape-*.apks
