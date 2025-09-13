@@ -85,8 +85,6 @@ jobs:
           export PATH="$QT_HOST_PATH/bin:$PATH"
           export QT_LOGGING_RULES='qt.qml.warning=true;qt.webview.*=true'
           export QT_DEBUG_PLUGINS=1
-          # Ensure no stale Buildozer artifacts confuse subsequent steps
-          rm -rf .buildozer || true
           # Download Android (arm64-v8a) wheels for PySide6 Addons and shiboken6 from Qt official releases
           set -euo pipefail
           PYSIDE_VER=6.9.2
@@ -136,8 +134,6 @@ jobs:
           set -euo pipefail
           echo 'Top-level:'
           ls -al . || true
-          echo 'Remove unexpected .buildozer if present (PySide6 flow only)'
-          if [ -d .buildozer ]; then echo 'WARNING: stale .buildozer directory found; removing'; rm -rf .buildozer; fi
           echo 'Find gradlew (depth 8):'
           find . -maxdepth 8 -type f -name gradlew -printf '%p\n' || true
           echo 'Directory tree (limited):'
@@ -231,12 +227,7 @@ jobs:
         working-directory: android
         run: |
           set -euo pipefail
-          # Prefer a gradlew inside a deployment directory produced by pyside6-android-deploy
-          GRADLE_FILE=$(find ./deployment -maxdepth 8 -type f -name gradlew -printf '%p\n' 2>/dev/null | head -n1 || true)
-          if [ -z "$GRADLE_FILE" ]; then
-            # Fallback: any gradlew under android/, but explicitly ignore .buildozer if it reappears
-            GRADLE_FILE=$(find . -path './.buildozer' -prune -o -maxdepth 8 -type f -name gradlew -printf '%p\n' | head -n1 || true)
-          fi
+          GRADLE_FILE=$(find . -maxdepth 8 -type f -name gradlew -printf '%p\n' | head -n1 || true)
           if [ -z "${GRADLE_FILE}" ]; then
             echo "No Gradle wrapper produced by pyside6-android-deploy; AAB build not supported in this version." >&2
             exit 0
@@ -257,11 +248,8 @@ jobs:
         working-directory: android
         run: |
           set -euo pipefail
-          # Locate a generated Gradle wrapper (prefer deployment path; ignore .buildozer)
-          GRADLE_DIR="$(find ./deployment -maxdepth 5 -type f -name gradlew -printf '%h\n' 2>/dev/null | head -n1 || true)"
-          if [ -z "$GRADLE_DIR" ]; then
-            GRADLE_DIR="$(find . -path './.buildozer' -prune -o -maxdepth 5 -type f -name gradlew -printf '%h\n' | head -n1 || true)"
-          fi
+          # Locate a generated Gradle wrapper (deployment directory naming may vary)
+          GRADLE_DIR="$(find . -maxdepth 3 -type f -name gradlew -printf '%h\n' | head -n1 || true)"
           if [ -z "${GRADLE_DIR}" ]; then
             echo "No Gradle wrapper found (cannot build AAB)." >&2
             exit 0
