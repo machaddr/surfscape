@@ -46,7 +46,8 @@
   "cmakeVersion": "3.30.5"
     },
     "architectures": [
-      "arm64-v8a"
+      "arm64-v8a",
+      "x86_64"
     ],
     "signing": {
       "keystorePath": "",
