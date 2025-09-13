@@ -10,6 +10,7 @@ os.environ.setdefault("QT_DEBUG_PLUGINS", "1")
 from PySide6.QtCore import QUrl, QObject, Slot, Signal, QStandardPaths, qInstallMessageHandler, QtMsgType
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtQml import QQmlApplicationEngine, QQmlComponent
+from PySide6 import QtNetwork
 import traceback
 import time
 import logging
