@@ -175,7 +175,17 @@ jobs:
           cp "$RES_DIR/mipmap-xxxhdpi/ic_launcher.png" "$ADAPTIVE_DIR/ic_launcher_round.png" || true
           # Remove or downscale oversized single icon if present in plain mipmap/
           if [ -f "$RES_DIR/mipmap/icon.png" ]; then rm -f "$RES_DIR/mipmap/icon.png" || true; fi
+          # Provide legacy name referenced by manifest (@mipmap/icon)
+          mkdir -p "$RES_DIR/mipmap"
+          if [ -f "$RES_DIR/mipmap-xxxhdpi/ic_launcher.png" ]; then
+            cp "$RES_DIR/mipmap-xxxhdpi/ic_launcher.png" "$RES_DIR/mipmap/icon.png"
+          else
+            # fallback to any existing launcher
+            FOUND_LAUNCHER=$(find "$RES_DIR" -maxdepth 2 -name ic_launcher.png | head -n1 || true)
+            if [ -n "$FOUND_LAUNCHER" ]; then cp "$FOUND_LAUNCHER" "$RES_DIR/mipmap/icon.png"; fi
+          fi
           echo "Generated launcher icons:" && find "$RES_DIR" -maxdepth 2 -type f -name 'ic_launcher*.png' -printf '%p\n'
+          if [ -f "$RES_DIR/mipmap/icon.png" ]; then echo "Legacy manifest icon in place: $RES_DIR/mipmap/icon.png"; else echo "WARNING: legacy mipmap/icon.png still missing"; fi
 
       - name: Attempt AAB build via Gradle (best-effort)
         working-directory: android
