@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">Surfscape</string>
+    <string name="go">Go</string>
+    <string name="back">Back</string>
+    <string name="forward">Forward</string>
+    <string name="reload">Reload</string>
+    <string name="enter_url">Enter URL</string>
+</resources>

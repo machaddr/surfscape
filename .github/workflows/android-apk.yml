@@ -1,362 +1,88 @@
-name: android-apk
+name: Android APK
 
 on:
-  push:
-    branches: [ main ]
-    tags: [ 'v*' ]
-  workflow_dispatch:
+	push:
+		branches: [ main ]
+		paths:
+			- 'android/**'
+			- '.github/workflows/android-apk.yml'
+	pull_request:
+		branches: [ main ]
+		paths:
+			- 'android/**'
+			- '.github/workflows/android-apk.yml'
+	workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-22.04
+	build:
+		runs-on: ubuntu-latest
+		timeout-minutes: 30
+		env:
+			JAVA_VERSION: '17'
+			ANDROID_SDK_ROOT: ${{ runner.temp }}/android-sdk
+		steps:
+			- name: Checkout
+				uses: actions/checkout@v4
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+			- name: Set up JDK ${{ env.JAVA_VERSION }}
+				uses: actions/setup-java@v4
+				with:
+					distribution: temurin
+					java-version: ${{ env.JAVA_VERSION }}
+					cache: gradle
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+			- name: Grant execute permission for gradlew
+				run: chmod +x android/gradlew
 
-      - name: Set up Java (Android build)
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
+			- name: Build Debug APK
+				working-directory: android
+				run: ./gradlew assembleDebug --stacktrace
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+			- name: Build Release APK (unsigned)
+				working-directory: android
+				run: ./gradlew assembleRelease --stacktrace
 
-      - name: Install Android SDK components
-        run: |
-          yes | sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" \
-               "ndk;27.1.12297006" "cmake;3.30.5"
+			- name: Upload APK Artifacts
+				uses: actions/upload-artifact@v4
+				with:
+					name: surfscape-apks
+					path: |
+						android/app/build/outputs/apk/debug/*.apk
+						android/app/build/outputs/apk/release/*.apk
+					if-no-files-found: error
 
-      - name: Ensure Buildozer uses modern sdkmanager
-        run: |
-          set -eux
-          SDK="$ANDROID_SDK_ROOT"
-          # Remove legacy tools dir if present and point it to cmdline-tools sdkmanager
-          sudo rm -rf "$SDK/tools" || true
-          sudo mkdir -p "$SDK/tools/bin"
-          if [ -x "$SDK/cmdline-tools/latest/bin/sdkmanager" ]; then
-            SRC="$SDK/cmdline-tools/latest/bin/sdkmanager"
-          else
-            SRC_DIR=$(ls -d "$SDK"/cmdline-tools/*/bin 2>/dev/null | head -n1)
-            if [ -z "${SRC_DIR:-}" ]; then
-              echo "No cmdline-tools found under $SDK/cmdline-tools" >&2
-              exit 1
-            fi
-            SRC="$SRC_DIR/sdkmanager"
-          fi
-          sudo ln -sf "$SRC" "$SDK/tools/bin/sdkmanager"
-          "$SDK/tools/bin/sdkmanager" --version || true
+					- name: Conditional Sign Release APK
+						id: sign_release
+				if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+				env:
+					KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+					KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+					KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+					KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+				run: |
+					echo "Signing release APK if keystore is provided"
+					mkdir -p keystore
+					echo "$KEYSTORE_B64" | base64 -d > keystore/keystore.jks
+					unsigned_apk=$(ls android/app/build/outputs/apk/release/app-release-unsigned.apk)
+					jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 -keystore keystore/keystore.jks -storepass "$KEYSTORE_PASSWORD" -keypass "$KEY_PASSWORD" "$unsigned_apk" "$KEY_ALIAS"
+					# Align & zip (using Android build-tools) if available
+					buildToolsDir=$(ls $ANDROID_HOME/build-tools | sort -r | head -n1)
+					if [ -d "$ANDROID_HOME/build-tools/$buildToolsDir" ]; then
+						zipalign="$ANDROID_HOME/build-tools/$buildToolsDir/zipalign"
+						apksigner="$ANDROID_HOME/build-tools/$buildToolsDir/apksigner"
+						if [ -x "$zipalign" ] && [ -x "$apksigner" ]; then
+							aligned_apk=android/app/build/outputs/apk/release/app-release-aligned.apk
+							"$zipalign" -f 4 "$unsigned_apk" "$aligned_apk"
+							"$apksigner" verify "$aligned_apk"
+							mv "$aligned_apk" android/app/build/outputs/apk/release/app-release-signed.apk
+						fi
+					fi
+					echo "Signed APK ready (if keystore was supplied)."
 
-      - name: Install Qt (host tools + Android) via aqtinstall
-        run: |
-          python -m pip install "aqtinstall>=3.1.0"
-
-          # Desktop (gcc_64) is required for host tools used by pyside6-android-deploy (e.g., rcc, lrelease).
-          python -m aqt install-qt linux desktop 6.9.2 linux_gcc_64 --outputdir /opt/Qt
-
-          # Install the Qt for Android kit for arm64-v8a so deploy can link the correct Android libs.
-          python -m aqt install-qt linux android 6.9.2 android_arm64_v8a --outputdir /opt/Qt
-
-      - name: Install PySide6 tooling
-        run: |
-          pip install "PySide6==6.9.2" "PySide6-Addons==6.9.2" "shiboken6==6.9.2"
-
-      - name: Install PySide6 Android deploy requirements
-        run: |
-          python -m pip install jinja2 pkginfo tqdm "packaging==24.1"
-
-      - name: Prepare Android assets (icon)
-        run: |
-          set -euo pipefail
-          cp icon/icon.png android/icon.png
-          ls -l android/icon.png
-
-      - name: Build APK (PySide6 Android deploy)
-        working-directory: android
-        run: |
-          export ANDROID_NDK_ROOT="$ANDROID_SDK_ROOT/ndk/27.1.12297006"
-          export QT_HOST_PATH="/opt/Qt/6.9.2/gcc_64"
-          export PATH="$QT_HOST_PATH/bin:$PATH"
-          export QT_LOGGING_RULES='qt.qml.warning=true;qt.webview.*=true'
-          export QT_DEBUG_PLUGINS=1
-          # Download Android (arm64-v8a) wheels for PySide6 Addons and shiboken6 from Qt official releases
-          set -euo pipefail
-          PYSIDE_VER=6.9.2
-          BASE_URL="https://download.qt.io/official_releases/QtForPython"
-          mkdir -p dist-wheels
-          fetch_wheel() {
-            local pkg_dir="$1"  # e.g. pyside6-addons or shiboken6
-            local out_var="$2"  # variable name to export path into
-            local index_url="$BASE_URL/$pkg_dir/"
-            echo "Fetching index: $index_url" >&2
-            local wheel_name
-            wheel_name=$(curl -fsSL "$index_url" | \
-              grep -Eo '[^" ]+\.whl' | \
-              grep -E "${PYSIDE_VER}" | \
-              grep -E "android_aarch64" | \
-              grep -E "cp311" | \
-              head -n1 || true)
-            if [ -z "${wheel_name:-}" ]; then
-              echo "Could not find Android aarch64 wheel at $index_url" >&2
-              return 1
-            fi
-            echo "Found wheel: $wheel_name" >&2
-            curl -fsSL -o "dist-wheels/$wheel_name" "$index_url$wheel_name"
-            eval "$out_var=dist-wheels/$wheel_name"
-          }
-          WHEEL_PYSIDE=""
-          WHEEL_SHIBOKEN=""
-          fetch_wheel pyside6 WHEEL_PYSIDE
-          fetch_wheel shiboken6 WHEEL_SHIBOKEN
-          echo "Wheels ready: $WHEEL_PYSIDE | $WHEEL_SHIBOKEN"
-
-          pyside6-android-deploy \
-            -f \
-            --name "Surfscape" \
-            --sdk-path "$ANDROID_SDK_ROOT" \
-            --ndk-path "$ANDROID_NDK_ROOT" \
-            --wheel-pyside "$WHEEL_PYSIDE" \
-            --wheel-shiboken "$WHEEL_SHIBOKEN" \
-            --keep-deployment-files \
-            -v
-
-          echo "APK artifacts:" && find . -name "*.apk" -o -name "*.aab"
-
-      - name: Inspect deployment directories
-        working-directory: android
-        run: |
-          set -euo pipefail
-          echo 'Top-level:'
-          ls -al . || true
-          echo 'Find gradlew (depth 8):'
-          find . -maxdepth 8 -type f -name gradlew -printf '%p\n' || true
-          echo 'Directory tree (limited):'
-          find . -maxdepth 4 -type d -printf '%p\n'
-
-      - name: Normalize launcher icons for Gradle build
-        working-directory: android
-        run: |
-          set -euo pipefail
-          # Only proceed if a Gradle wrapper exists (otherwise skip silently)
-          GRADLE_FILE=$(find ./deployment -maxdepth 8 -type f -name gradlew -printf '%p\n' | head -n1 || true)
-          if [ -z "${GRADLE_FILE}" ]; then
-            echo "No Gradle project; skipping icon normalization."; exit 0; fi
-          # Ensure ImageMagick
-          if ! command -v convert >/dev/null 2>&1; then
-            sudo apt-get update -y && sudo apt-get install -y imagemagick
-          fi
-          SRC_ICON="icon.png"
-          if [ ! -f "$SRC_ICON" ]; then
-            # fallback to root icon if copied earlier
-            if [ -f ../icon.png ]; then SRC_ICON=../icon.png; fi
-          fi
-          if [ ! -f "$SRC_ICON" ]; then echo "No source icon found"; exit 0; fi
-          GRADLE_DIR=$(dirname "$GRADLE_FILE")
-          RES_DIR="$GRADLE_DIR/src/main/res"
-          mkdir -p "$RES_DIR"
-          # Densities and target sizes (square)
-          set +u
-          for spec in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
-            dens=${spec%%:*}; size=${spec##*:};
-            outdir="$RES_DIR/mipmap-$dens"; mkdir -p "$outdir";
-            convert "$SRC_ICON" -resize ${size}x${size} -gravity center -background none -extent ${size}x${size} "$outdir/ic_launcher.png";
-            cp "$outdir/ic_launcher.png" "$outdir/ic_launcher_round.png" || true;
-          done
-          set -u
-          # Anydpi adaptive (use largest existing)
-          ADAPTIVE_DIR="$RES_DIR/mipmap-anydpi-v26"; mkdir -p "$ADAPTIVE_DIR"
-          cp "$RES_DIR/mipmap-xxxhdpi/ic_launcher.png" "$ADAPTIVE_DIR/ic_launcher.png" || true
-          cp "$RES_DIR/mipmap-xxxhdpi/ic_launcher.png" "$ADAPTIVE_DIR/ic_launcher_round.png" || true
-          # Remove or downscale oversized single icon if present in plain mipmap/
-          if [ -f "$RES_DIR/mipmap/icon.png" ]; then rm -f "$RES_DIR/mipmap/icon.png" || true; fi
-          # Provide legacy name referenced by manifest (@mipmap/icon)
-          mkdir -p "$RES_DIR/mipmap"
-          if [ -f "$RES_DIR/mipmap-xxxhdpi/ic_launcher.png" ]; then
-            cp "$RES_DIR/mipmap-xxxhdpi/ic_launcher.png" "$RES_DIR/mipmap/icon.png"
-          else
-            # fallback to any existing launcher
-            FOUND_LAUNCHER=$(find "$RES_DIR" -maxdepth 2 -name ic_launcher.png | head -n1 || true)
-            if [ -n "$FOUND_LAUNCHER" ]; then cp "$FOUND_LAUNCHER" "$RES_DIR/mipmap/icon.png"; fi
-          fi
-          echo "Generated launcher icons:" && find "$RES_DIR" -maxdepth 2 -type f -name 'ic_launcher*.png' -printf '%p\n'
-          if [ -f "$RES_DIR/mipmap/icon.png" ]; then echo "Legacy manifest icon in place: $RES_DIR/mipmap/icon.png"; else echo "WARNING: legacy mipmap/icon.png still missing"; fi
-
-      - name: Patch manifest & Gradle for release (targetSdk 35)
-        working-directory: android
-        run: |
-          set -euo pipefail
-          GRADLE_FILE=$(find ./deployment -maxdepth 8 -type f -name gradlew -printf '%p\n' | head -n1 || true)
-          if [ -z "${GRADLE_FILE}" ]; then
-            echo "No Gradle project; skipping manifest/gradle patch."; exit 0; fi
-          GRADLE_DIR=$(dirname "$GRADLE_FILE")
-          MANIFEST="$GRADLE_DIR/src/main/AndroidManifest.xml"
-          MODULE_GRADLE="$GRADLE_DIR/build.gradle"
-          echo "Patching files: $MANIFEST and $MODULE_GRADLE"
-          if [ -f "$MANIFEST" ]; then
-            # Remove hardcoded debuggable attribute
-            perl -0777 -pi -e 's/\s+android:debuggable="true"//g' "$MANIFEST"
-            # Update targetSdkVersion attribute inside <uses-sdk>
-            perl -0777 -pi -e 's/android:targetSdkVersion="\d+"/android:targetSdkVersion="35"/g' "$MANIFEST"
-            # Ensure minSdk aligns with config (23) if present lower than 23
-            perl -0777 -pi -e 's/android:minSdkVersion="(2[0-2])"/android:minSdkVersion="23"/g' "$MANIFEST" || true
-          else
-            echo "Manifest not found at expected path: $MANIFEST" >&2
-          fi
-          if [ -f "$MODULE_GRADLE" ]; then
-            sed -i 's/targetSdkVersion "+*31"*/targetSdkVersion 35/' "$MODULE_GRADLE" || true
-            sed -i 's/compileSdkVersion "+*31"*/compileSdkVersion 35/' "$MODULE_GRADLE" || true
-            # Add/patch android block for namespace if missing (quiet)
-            if ! grep -q 'compileSdkVersion 35' "$MODULE_GRADLE"; then echo 'WARNING: compileSdkVersion 35 not set' >&2; fi
-            # Relax lint abort to avoid future non-fatal failures
-            if ! grep -q 'lintOptions' "$MODULE_GRADLE"; then
-              perl -0777 -pi -e 's/android \{/android {\n    lintOptions { abortOnError false }/ if /android \{/ && !/lintOptions/' "$MODULE_GRADLE" || true
-            fi
-          else
-            echo "build.gradle not found at expected path: $MODULE_GRADLE" >&2
-          fi
-          echo "--- MANIFEST (excerpt) ---"; grep -E 'uses-sdk|application' -n "$MANIFEST" || true
-          echo "--- Gradle SDK lines ---"; grep -E 'compileSdkVersion|targetSdkVersion|minSdkVersion' -n "$MODULE_GRADLE" || true
-
-      - name: Attempt AAB build via Gradle (best-effort)
-        working-directory: android
-        run: |
-          set -euo pipefail
-          GRADLE_FILE=$(find . -maxdepth 8 -type f -name gradlew -printf '%p\n' | head -n1 || true)
-          if [ -z "${GRADLE_FILE}" ]; then
-            echo "No Gradle wrapper produced by pyside6-android-deploy; AAB build not supported in this version." >&2
-            exit 0
-          fi
-          GRADLE_DIR=$(dirname "$GRADLE_FILE")
-          echo "Using Gradle wrapper at: $GRADLE_FILE"
-          chmod +x "$GRADLE_FILE"
-          (cd "$GRADLE_DIR" && ./gradlew --no-daemon bundleRelease)
-          AAB_OUT=$(find "$GRADLE_DIR" -path '*/build/outputs/bundle/*/*.aab' | head -n1 || true)
-          if [ -n "${AAB_OUT}" ]; then
-            echo "AAB built: ${AAB_OUT}"
-            cp "$AAB_OUT" ./Surfscape-release.aab || cp "$AAB_OUT" ../Surfscape-release.aab || true
-          else
-            echo "Gradle executed but no AAB located." >&2
-          fi
-
-      - name: Build AAB via Gradle (if project generated)
-        working-directory: android
-        run: |
-          set -euo pipefail
-          # Locate a generated Gradle wrapper (deployment directory naming may vary)
-          GRADLE_DIR="$(find . -maxdepth 3 -type f -name gradlew -printf '%h\n' | head -n1 || true)"
-          if [ -z "${GRADLE_DIR}" ]; then
-            echo "No Gradle wrapper found (cannot build AAB)." >&2
-            exit 0
-          fi
-          echo "Using Gradle project at: $GRADLE_DIR"
-          cd "$GRADLE_DIR"
-          chmod +x gradlew
-            ./gradlew --no-daemon bundleRelease
-          AAB_OUT=$(find . -path '*/build/outputs/bundle/*/*.aab' | head -n1 || true)
-          if [ -n "${AAB_OUT}" ]; then
-            echo "AAB built: ${AAB_OUT}"
-            cp "$AAB_OUT" ../../Surfscape-release.aab || true
-          else
-            echo "Gradle build completed but no AAB located." >&2
-          fi
-
-      - name: Generate universal APK from AAB (bundletool)
-        working-directory: android
-        run: |
-          set -euo pipefail
-          AAB_FILE=$(find . -maxdepth 2 -name 'Surfscape-release.aab' -o -name '*.aab' | head -n1 || true)
-          if [ -z "${AAB_FILE}" ]; then
-            echo "No AAB file to convert." >&2
-            exit 0
-          fi
-          BUNDLETOOL_VERSION=1.16.0
-          curl -L -o bundletool.jar "https://github.com/google/bundletool/releases/download/${BUNDLETOOL_VERSION}/bundletool-all-${BUNDLETOOL_VERSION}.jar"
-
-          echo "--- Keystore setup ---"
-          # If release keystore secrets are provided, use them, else generate a debug keystore
-          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
-            echo "Decoding release keystore from secret"
-            echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > release.keystore
-            KS_PATH=release.keystore
-            KS_ALIAS='${{ secrets.ANDROID_KEY_ALIAS }}'
-            KS_STORE_PASS='${{ secrets.ANDROID_KEYSTORE_PASSWORD }}'
-            KS_KEY_PASS='${{ secrets.ANDROID_KEY_PASSWORD }}'
-          else
-            echo "Creating debug keystore (no release secrets present)"
-            keytool -genkeypair -noprompt \
-              -alias androiddebugkey \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -dname "CN=Android,O=Android,C=US" \
-              -storepass android -keypass android \
-              -keystore debug.keystore
-            KS_PATH=debug.keystore
-            KS_ALIAS=androiddebugkey
-            KS_STORE_PASS=android
-            KS_KEY_PASS=android
-          fi
-
-          echo "Building signed universal .apks archive via bundletool"
-          java -jar bundletool.jar build-apks \
-            --bundle="${AAB_FILE}" \
-            --mode=universal \
-            --output=Surfscape-universal.apks \
-            --ks="$KS_PATH" \
-            --ks-key-alias="$KS_ALIAS" \
-            --ks-pass=pass:$KS_STORE_PASS \
-            --key-pass=pass:$KS_KEY_PASS
-
-          echo "Extracting universal APK"
-          unzip -p Surfscape-universal.apks universal.apk > Surfscape-universal-unsigned.apk || true
-          if [ ! -s Surfscape-universal-unsigned.apk ]; then
-            echo "Failed to extract universal.apk from APKS archive." >&2
-            exit 1
-          fi
-
-          # Align + (re)sign extracted APK explicitly (some devices are strict)
-          BUILD_TOOLS_DIR=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* 2>/dev/null | sort -Vr | head -n1)
-          ZIPALIGN="$BUILD_TOOLS_DIR/zipalign"
-          APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
-          if [ ! -x "$ZIPALIGN" ]; then echo "zipalign not found" >&2; exit 1; fi
-          if [ ! -x "$APKSIGNER" ]; then echo "apksigner not found" >&2; exit 1; fi
-          echo "Aligning APK"
-          "$ZIPALIGN" -p -f 4 Surfscape-universal-unsigned.apk Surfscape-universal-aligned.apk
-          echo "Signing APK"
-          "$APKSIGNER" sign --ks "$KS_PATH" --ks-key-alias "$KS_ALIAS" \
-            --ks-pass pass:$KS_STORE_PASS --key-pass pass:$KS_KEY_PASS \
-            --out Surfscape-universal-signed.apk Surfscape-universal-aligned.apk
-          echo "Verifying signature"
-          "$APKSIGNER" verify -v Surfscape-universal-signed.apk || { echo "Signature verification failed" >&2; exit 1; }
-          mv Surfscape-universal-signed.apk Surfscape-universal.apk
-          echo "Final universal APK: Surfscape-universal.apk"
-          ls -l *.aab *.apks *.apk 2>/dev/null || true
-
-      - name: Verify produced APK(s) metadata
-        working-directory: android
-        run: |
-          set -euo pipefail
-          BUILD_TOOLS_DIR=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/* 2>/dev/null | sort -Vr | head -n1)
-            AAPT="$BUILD_TOOLS_DIR/aapt"; if [ ! -x "$AAPT" ]; then AAPT="$BUILD_TOOLS_DIR/aapt2"; fi
-          if ls *.apk >/dev/null 2>&1; then
-            for f in *.apk; do
-              echo "\n== $f =="
-              if command -v file >/dev/null 2>&1; then file "$f"; fi
-              if [ -x "$AAPT" ]; then "$AAPT" dump badging "$f" | head -n40 || true; fi
-            done
-          else
-            echo "No APK files found for verification." >&2
-          fi
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: surfscape-android
-          path: |
-            **/*.apk
-            **/*.aab
-            android/Surfscape-universal.apks
+			- name: Upload Signed APK
+				if: ${{ steps.sign_release.conclusion == 'success' }}
+				uses: actions/upload-artifact@v4
+				with:
+					name: surfscape-apk-signed
+					path: android/app/build/outputs/apk/release/app-release-signed.apk
+					if-no-files-found: ignore
