@@ -18,6 +18,21 @@ android {
         vectorDrawables.useSupportLibrary = true
     }
 
+    signingConfigs {
+        create("release") {
+            val ksPath = System.getenv("SURFSCAPE_KEYSTORE_PATH")
+            if (ksPath != null) {
+                val f = File(ksPath)
+                if (f.exists()) {
+                    storeFile = file(ksPath)
+                    storePassword = System.getenv("SURFSCAPE_KEYSTORE_PASSWORD")
+                    keyAlias = System.getenv("SURFSCAPE_KEY_ALIAS")
+                    keyPassword = System.getenv("SURFSCAPE_KEY_PASSWORD")
+                }
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
@@ -25,6 +40,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Attach signing config if provided via environment
+            val ksPath = System.getenv("SURFSCAPE_KEYSTORE_PATH")
+            if (ksPath != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
         debug {
             applicationIdSuffix = ".debug"
