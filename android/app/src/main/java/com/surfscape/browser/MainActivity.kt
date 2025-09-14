@@ -102,6 +102,7 @@ class MainActivity : AppCompatActivity() {
                 // Use DuckDuckGo HTML endpoint for lightweight results
                 "https://html.duckduckgo.com/html/?q=$q"
             }
+            Log.d("Surfscape", "Loading URL: $target")
             geckoSession.loadUri(target)
         }
 

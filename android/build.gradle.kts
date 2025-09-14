@@ -4,4 +4,4 @@ plugins {
 }
 
 // Pinned GeckoView version from maven.mozilla.org (metadata <latest>/<release>)
-extra["geckoviewVersion"] = "142.0.20250827004350"
+extra["geckoviewVersion"] = "142.0.1"
