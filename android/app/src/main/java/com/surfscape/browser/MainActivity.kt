@@ -27,6 +27,11 @@ class MainActivity : AppCompatActivity() {
 
     private val HOME_URL = "https://html.duckduckgo.com"
 
+    // Delegates retained so we can reassign them to a new session cleanly
+    private lateinit var navigationDelegate: GeckoSession.NavigationDelegate
+    private lateinit var contentDelegate: ContentDelegate
+    private lateinit var progressDelegate: ProgressDelegate
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -58,8 +63,7 @@ class MainActivity : AppCompatActivity() {
         val statusBar: TextView = findViewById(R.id.statusBar)
 
         runtime = (application as SurfscapeApp).runtime
-        geckoSession = GeckoSession()
-        geckoSession.setNavigationDelegate(object : GeckoSession.NavigationDelegate {
+        navigationDelegate = object : GeckoSession.NavigationDelegate {
             override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
                 canGoBackFlag = canGoBack
                 btnBack.isEnabled = canGoBack
@@ -83,9 +87,9 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-        })
+        }
 
-        geckoSession.contentDelegate = object : ContentDelegate {
+        contentDelegate = object : ContentDelegate {
             override fun onTitleChange(session: GeckoSession, title: String?) {
                 title?.let {
                     runOnUiThread { this@MainActivity.title = it }
@@ -103,7 +107,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        geckoSession.progressDelegate = object : ProgressDelegate {
+        progressDelegate = object : ProgressDelegate {
             override fun onProgressChange(session: GeckoSession, progress: Int) {
                 progressBar.visibility = if (progress in 1..99) ProgressBar.VISIBLE else ProgressBar.GONE
                 progressBar.progress = progress
@@ -113,8 +117,7 @@ class MainActivity : AppCompatActivity() {
                 // Could update a lock icon later
             }
         }
-    geckoSession.open(runtime)
-    geckoView.setSession(geckoSession)
+        initializeNewSession()
 
         fun loadUrl(raw: String) {
             val trimmed = raw.trim()
@@ -165,20 +168,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun restartGeckoSession() {
-        val newSession = GeckoSession()
-        // Reapply delegates (minimal duplication - could be refactored later)
-        newSession.setNavigationDelegate(geckoSession.navigationDelegate)
-        newSession.contentDelegate = geckoSession.contentDelegate
-        newSession.progressDelegate = geckoSession.progressDelegate
-        try {
-            newSession.open(runtime)
-            geckoView.setSession(newSession)
-            geckoSession = newSession
-            Log.i("Surfscape", "GeckoSession restarted")
-            geckoSession.loadUri(HOME_URL)
-        } catch (t: Throwable) {
-            Log.e("Surfscape", "Failed to restart GeckoSession", t)
-        }
+        Log.i("Surfscape", "Restarting GeckoSession")
+        try { geckoSession.close() } catch (_: Exception) { }
+        initializeNewSession()
+        geckoSession.loadUri(HOME_URL)
+    }
+
+    private fun initializeNewSession() {
+        val session = GeckoSession()
+        session.setNavigationDelegate(navigationDelegate)
+        session.contentDelegate = contentDelegate
+        session.progressDelegate = progressDelegate
+        session.open(runtime)
+        geckoView.setSession(session)
+        geckoSession = session
+        Log.d("Surfscape", "GeckoSession opened")
     }
 
     override fun onDestroy() {
