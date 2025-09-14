@@ -10,6 +10,8 @@ import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.GeckoSession.ProgressDelegate
+import org.mozilla.geckoview.GeckoSession.ContentDelegate
+import android.util.Log
 
 class MainActivity : AppCompatActivity() {
     private lateinit var geckoView: GeckoView
@@ -54,12 +56,31 @@ class MainActivity : AppCompatActivity() {
                 permissions: MutableList<GeckoSession.PermissionDelegate.ContentPermission>,
                 hasUserGesture: Boolean
             ) {
-                url?.let {
-                    urlBar.setText(it)
-                    statusBar.text = it
+                if (url != null) {
+                    runOnUiThread {
+                        urlBar.setText(url)
+                        statusBar.text = url
+                    }
                 }
             }
         })
+
+        geckoSession.contentDelegate = object : ContentDelegate {
+            override fun onTitleChange(session: GeckoSession, title: String?) {
+                title?.let {
+                    runOnUiThread { this@MainActivity.title = it }
+                }
+            }
+
+            override fun onCrash(session: GeckoSession) {
+                Log.e("Surfscape", "GeckoSession crashed")
+            }
+
+            override fun onFirstContentfulPaint(session: GeckoSession) { /* no-op */ }
+            override fun onPageStart(session: GeckoSession, url: String) { /* no-op */ }
+            override fun onPageStop(session: GeckoSession, success: Boolean) { /* no-op */ }
+            override fun onNavigationStateChange(session: GeckoSession, state: GeckoSession.NavigationDelegate.NavigationState) { /* not used */ }
+        }
 
         geckoSession.progressDelegate = object : ProgressDelegate {
             override fun onProgressChange(session: GeckoSession, progress: Int) {
