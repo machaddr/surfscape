@@ -28,12 +28,15 @@ jobs:
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
-          cache: gradle
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
           gradle-version: 8.7
+          # Allow writes only on main to reduce cache save collisions / failures
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+          # Periodically clean outdated entries to keep cache small/stable
+          gradle-home-cache-cleanup: true
 
       - name: Generate Gradle wrapper (if missing)
         working-directory: android
@@ -58,7 +61,7 @@ jobs:
 
       - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4
-        with:
+        with: 
           name: surfscape-apks
           path: |
             android/app/build/outputs/apk/debug/*.apk

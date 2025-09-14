@@ -12,6 +12,7 @@ import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.GeckoSession.ProgressDelegate
 import org.mozilla.geckoview.GeckoSession.ContentDelegate
 import android.util.Log
+import androidx.activity.OnBackPressedCallback
 
 class MainActivity : AppCompatActivity() {
     private lateinit var geckoView: GeckoView
@@ -121,16 +122,21 @@ class MainActivity : AppCompatActivity() {
             } else false
         }
 
+        // Back press handling via dispatcher (replaces deprecated onBackPressed())
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (this@MainActivity::geckoSession.isInitialized && canGoBackFlag) {
+                    geckoSession.goBack()
+                } else {
+                    // Disable callback temporarily to allow system default
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
+
         // Initial homepage
         loadUrl(HOME_URL)
-    }
-
-    override fun onBackPressed() {
-        if (this::geckoSession.isInitialized && canGoBackFlag) {
-            geckoSession.goBack()
-        } else {
-            super.onBackPressed()
-        }
     }
 
     override fun onDestroy() {

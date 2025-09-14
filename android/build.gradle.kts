@@ -4,4 +4,4 @@ plugins {
 }
 
 // Pinned GeckoView latest release (from maven-metadata.xml <release>)
-extra["geckoviewVersion"] = "142.0.20250827004350"
+extra["geckoviewVersion"] = "141.0.20250806102122"
