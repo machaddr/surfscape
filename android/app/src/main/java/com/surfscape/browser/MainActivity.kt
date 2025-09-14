@@ -15,6 +15,7 @@ import org.mozilla.geckoview.GeckoSession.ProgressDelegate
 import org.mozilla.geckoview.GeckoSession.ContentDelegate
 import android.util.Log
 import androidx.activity.OnBackPressedCallback
+import com.surfscape.browser.BuildConfig
 
 class MainActivity : AppCompatActivity() {
     private lateinit var geckoView: GeckoView

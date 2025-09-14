@@ -4,6 +4,7 @@ import android.app.Application
 import android.util.Log
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoRuntimeSettings
+import com.surfscape.browser.BuildConfig
 
 class SurfscapeApp : Application() {
     lateinit var runtime: GeckoRuntime
