@@ -3,13 +3,12 @@ package com.surfscape.browser
 import android.os.Bundle
 import android.view.KeyEvent
 import android.view.inputmethod.EditorInfo
-import android.widget.Button
-import android.widget.EditText
-import android.widget.ImageButton
+import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
+import org.mozilla.geckoview.GeckoSession.ProgressDelegate
 
 class MainActivity : AppCompatActivity() {
     private lateinit var geckoView: GeckoView
@@ -24,25 +23,43 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
 
         geckoView = findViewById(R.id.geckoView)
-        val urlBar: EditText = findViewById(R.id.urlBar)
-        val btnGo: Button = findViewById(R.id.btnGo)
-        val btnBack: ImageButton = findViewById(R.id.btnBack)
-        val btnForward: ImageButton = findViewById(R.id.btnForward)
-        val btnReload: ImageButton = findViewById(R.id.btnReload)
+    val urlBar: EditText = findViewById(R.id.urlBar)
+    val btnGo: ImageButton = findViewById(R.id.btnGo)
+    val btnBack: ImageButton = findViewById(R.id.btnBack)
+    val btnForward: ImageButton = findViewById(R.id.btnForward)
+    val btnReload: ImageButton = findViewById(R.id.btnReload)
+    val progressBar: ProgressBar = findViewById(R.id.progressBar)
+    val statusBar: TextView = findViewById(R.id.statusBar)
 
         runtime = (application as SurfscapeApp).runtime
         geckoSession = GeckoSession()
         geckoSession.setNavigationDelegate(object : GeckoSession.NavigationDelegate {
             override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
                 canGoBackFlag = canGoBack
-                findViewById<ImageButton>(R.id.btnBack).isEnabled = canGoBack
+                btnBack.isEnabled = canGoBack
             }
 
             override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
                 canGoForwardFlag = canGoForward
-                findViewById<ImageButton>(R.id.btnForward).isEnabled = canGoForward
+                btnForward.isEnabled = canGoForward
+            }
+
+            override fun onLocationChange(session: GeckoSession, url: String) {
+                urlBar.setText(url)
+                statusBar.text = url
             }
         })
+
+        geckoSession.progressDelegate = object : ProgressDelegate {
+            override fun onProgressChange(session: GeckoSession, progress: Int) {
+                progressBar.visibility = if (progress in 1..99) ProgressBar.VISIBLE else ProgressBar.GONE
+                progressBar.progress = progress
+            }
+
+            override fun onSecurityChange(session: GeckoSession, securityInfo: ProgressDelegate.SecurityInformation) {
+                // Could update a lock icon later
+            }
+        }
         geckoSession.open(runtime)
         geckoView.setSession(geckoSession)
 
@@ -68,7 +85,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Initial homepage
-        loadUrl("example.org")
+        loadUrl("https://duckduckgo.com")
     }
 
     override fun onBackPressed() {

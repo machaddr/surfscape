@@ -40,15 +40,19 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // Attach signing config if provided via environment
             val ksPath = System.getenv("SURFSCAPE_KEYSTORE_PATH")
             if (ksPath != null) {
                 signingConfig = signingConfigs.getByName("release")
+            } else {
+                println("[Surfscape] Release signing variables not set. Provide SURFSCAPE_KEYSTORE_PATH, SURFSCAPE_KEYSTORE_PASSWORD, SURFSCAPE_KEY_ALIAS, SURFSCAPE_KEY_PASSWORD for signed build.")
             }
         }
+        // Optional: keep debug definition but disable packaging task by shrinking variant
         debug {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
+            // Avoid accidental distribution: mark debuggable (default) and lower version code impact if desired
+            isMinifyEnabled = false
         }
     }
     compileOptions {

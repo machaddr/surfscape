@@ -2,54 +2,104 @@
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical">
+    android:orientation="vertical"
+    android:background="@android:color/background_light">
 
+    <!-- Top toolbar -->
     <LinearLayout
+        android:id="@+id/topBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:padding="4dp">
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
+        android:gravity="center_vertical"
+        android:background="?attr/colorPrimary">
 
         <ImageButton
             android:id="@+id/btnBack"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:background="@android:color/transparent"
+            android:padding="4dp"
             android:contentDescription="@string/back"
-            android:src="@android:drawable/ic_media_previous" />
+            android:src="@android:drawable/ic_media_previous"
+            android:tint="@android:color/white" />
 
         <ImageButton
             android:id="@+id/btnForward"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:background="@android:color/transparent"
+            android:padding="4dp"
             android:contentDescription="@string/forward"
-            android:src="@android:drawable/ic_media_next" />
+            android:src="@android:drawable/ic_media_next"
+            android:tint="@android:color/white" />
+
+        <ImageButton
+            android:id="@+id/btnReload"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:background="@android:color/transparent"
+            android:padding="4dp"
+            android:contentDescription="@string/reload"
+            android:src="@android:drawable/ic_popup_sync"
+            android:tint="@android:color/white" />
 
         <EditText
             android:id="@+id/urlBar"
             android:layout_width="0dp"
-            android:layout_height="wrap_content"
+            android:layout_height="40dp"
+            android:layout_marginStart="6dp"
+            android:layout_marginEnd="6dp"
             android:layout_weight="1"
+            android:background="@android:drawable/edit_text"
             android:hint="@string/enter_url"
-            android:singleLine="true"
-            android:imeOptions="actionGo" />
-
-        <Button
-            android:id="@+id/btnGo"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/go" />
+            android:imeOptions="actionGo"
+            android:inputType="textUri"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:singleLine="true" />
 
         <ImageButton
-            android:id="@+id/btnReload"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:contentDescription="@string/reload"
-            android:src="@android:drawable/ic_popup_sync" />
+            android:id="@+id/btnGo"
+            android:layout_width="36dp"
+            android:layout_height="36dp"
+            android:background="@android:color/transparent"
+            android:padding="4dp"
+            android:contentDescription="@string/go"
+            android:src="@android:drawable/ic_media_play"
+            android:tint="@android:color/white" />
     </LinearLayout>
+
+    <ProgressBar
+        android:id="@+id/progressBar"
+        style="@android:style/Widget.ProgressBar.Horizontal"
+        android:layout_width="match_parent"
+        android:layout_height="3dp"
+        android:max="100"
+        android:progress="0"
+        android:visibility="gone" />
 
     <org.mozilla.geckoview.GeckoView
         android:id="@+id/geckoView"
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1"
+        android:background="@android:color/white" />
+
+    <!-- Simple bottom status bar placeholder -->
+    <TextView
+        android:id="@+id/statusBar"
+        android:layout_width="match_parent"
+        android:layout_height="24dp"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:gravity="center_vertical"
+        android:text="Ready"
+        android:textSize="12sp"
+        android:background="#ECECEC" />
+
 </LinearLayout>
