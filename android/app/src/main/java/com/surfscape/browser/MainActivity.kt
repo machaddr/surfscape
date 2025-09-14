@@ -1,6 +1,8 @@
 package com.surfscape.browser
 
+import android.os.Build
 import android.os.Bundle
+import android.os.StrictMode
 import android.view.KeyEvent
 import java.net.URLEncoder
 import android.view.inputmethod.EditorInfo
@@ -27,6 +29,22 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
+        // Enable StrictMode in debug builds to surface potential main-thread violations.
+        if (BuildConfig.DEBUG) {
+            StrictMode.setThreadPolicy(
+                StrictMode.ThreadPolicy.Builder()
+                    .detectAll()
+                    .penaltyLog()
+                    .build()
+            )
+            StrictMode.setVmPolicy(
+                StrictMode.VmPolicy.Builder()
+                    .detectLeakedClosableObjects()
+                    .penaltyLog()
+                    .build()
+            )
+        }
 
         geckoView = findViewById(R.id.geckoView)
         val urlBar: EditText = findViewById(R.id.urlBar)
@@ -74,7 +92,13 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onCrash(session: GeckoSession) {
-                Log.e("Surfscape", "GeckoSession crashed")
+                Log.e("Surfscape", "GeckoSession crashed; attempting restart")
+                runOnUiThread {
+                    try {
+                        geckoSession.close()
+                    } catch (_: Exception) { }
+                    restartGeckoSession()
+                }
             }
         }
 
@@ -88,8 +112,8 @@ class MainActivity : AppCompatActivity() {
                 // Could update a lock icon later
             }
         }
-        geckoSession.open(runtime)
-        geckoView.setSession(geckoSession)
+    geckoSession.open(runtime)
+    geckoView.setSession(geckoSession)
 
         fun loadUrl(raw: String) {
             val trimmed = raw.trim()
@@ -137,6 +161,23 @@ class MainActivity : AppCompatActivity() {
 
         // Initial homepage
         loadUrl(HOME_URL)
+    }
+
+    private fun restartGeckoSession() {
+        val newSession = GeckoSession()
+        // Reapply delegates (minimal duplication - could be refactored later)
+        newSession.setNavigationDelegate(geckoSession.navigationDelegate)
+        newSession.contentDelegate = geckoSession.contentDelegate
+        newSession.progressDelegate = geckoSession.progressDelegate
+        try {
+            newSession.open(runtime)
+            geckoView.setSession(newSession)
+            geckoSession = newSession
+            Log.i("Surfscape", "GeckoSession restarted")
+            geckoSession.loadUri(HOME_URL)
+        } catch (t: Throwable) {
+            Log.e("Surfscape", "Failed to restart GeckoSession", t)
+        }
     }
 
     override fun onDestroy() {

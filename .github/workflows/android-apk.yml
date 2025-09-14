@@ -35,8 +35,8 @@ jobs:
           gradle-version: 8.7
           # Allow writes only on main to reduce cache save collisions / failures
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
-          # Periodically clean outdated entries to keep cache small/stable
-          gradle-home-cache-cleanup: true
+          # Disabled cleanup to avoid post-job Gradle 9 cleanup regression
+          gradle-home-cache-cleanup: false
 
       - name: Generate Gradle wrapper (if missing)
         working-directory: android
