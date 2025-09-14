@@ -75,11 +75,6 @@ class MainActivity : AppCompatActivity() {
             override fun onCrash(session: GeckoSession) {
                 Log.e("Surfscape", "GeckoSession crashed")
             }
-
-            override fun onFirstContentfulPaint(session: GeckoSession) { /* no-op */ }
-            override fun onPageStart(session: GeckoSession, url: String) { /* no-op */ }
-            override fun onPageStop(session: GeckoSession, success: Boolean) { /* no-op */ }
-            override fun onNavigationStateChange(session: GeckoSession, state: GeckoSession.NavigationDelegate.NavigationState) { /* not used */ }
         }
 
         geckoSession.progressDelegate = object : ProgressDelegate {
