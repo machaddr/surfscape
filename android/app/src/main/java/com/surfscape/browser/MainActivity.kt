@@ -2,6 +2,7 @@ package com.surfscape.browser
 
 import android.os.Bundle
 import android.view.KeyEvent
+import java.net.URLEncoder
 import android.view.inputmethod.EditorInfo
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
@@ -18,18 +19,21 @@ class MainActivity : AppCompatActivity() {
     private var canGoBackFlag = false
     private var canGoForwardFlag = false
 
+    private val HOME_URL = "https://html.duckduckgo.com"
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         geckoView = findViewById(R.id.geckoView)
-    val urlBar: EditText = findViewById(R.id.urlBar)
-    val btnGo: ImageButton = findViewById(R.id.btnGo)
-    val btnBack: ImageButton = findViewById(R.id.btnBack)
-    val btnForward: ImageButton = findViewById(R.id.btnForward)
-    val btnReload: ImageButton = findViewById(R.id.btnReload)
-    val progressBar: ProgressBar = findViewById(R.id.progressBar)
-    val statusBar: TextView = findViewById(R.id.statusBar)
+        val urlBar: EditText = findViewById(R.id.urlBar)
+        val btnGo: ImageButton = findViewById(R.id.btnGo)
+        val btnBack: ImageButton = findViewById(R.id.btnBack)
+        val btnForward: ImageButton = findViewById(R.id.btnForward)
+        val btnReload: ImageButton = findViewById(R.id.btnReload)
+        val btnHome: ImageButton = findViewById(R.id.btnHome)
+        val progressBar: ProgressBar = findViewById(R.id.progressBar)
+        val statusBar: TextView = findViewById(R.id.statusBar)
 
         runtime = (application as SurfscapeApp).runtime
         geckoSession = GeckoSession()
@@ -71,10 +75,18 @@ class MainActivity : AppCompatActivity() {
         geckoView.setSession(geckoSession)
 
         fun loadUrl(raw: String) {
-            val fixed = if (!raw.startsWith("http://") && !raw.startsWith("https://")) {
-                "https://$raw"
-            } else raw
-            geckoSession.loadUri(fixed)
+            val trimmed = raw.trim()
+            if (trimmed.isEmpty()) return
+            val isLikelyUrl = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://").containsMatchIn(trimmed) ||
+                    (trimmed.contains('.') && !trimmed.contains(' '))
+            val target = if (isLikelyUrl) {
+                if (Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://").containsMatchIn(trimmed)) trimmed else "https://$trimmed"
+            } else {
+                val q = URLEncoder.encode(trimmed, Charsets.UTF_8.name())
+                // Use DuckDuckGo HTML endpoint for lightweight results
+                "https://html.duckduckgo.com/html/?q=$q"
+            }
+            geckoSession.loadUri(target)
         }
 
         btnGo.setOnClickListener { loadUrl(urlBar.text.toString()) }
@@ -83,6 +95,7 @@ class MainActivity : AppCompatActivity() {
         btnBack.setOnClickListener { if (canGoBackFlag) geckoSession.goBack() }
         btnForward.setOnClickListener { if (canGoForwardFlag) geckoSession.goForward() }
         btnReload.setOnClickListener { geckoSession.reload() }
+        btnHome.setOnClickListener { geckoSession.loadUri(HOME_URL) }
 
         urlBar.setOnEditorActionListener { _, actionId, event ->
             if (actionId == EditorInfo.IME_ACTION_GO || (event?.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_UP)) {
@@ -92,7 +105,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         // Initial homepage
-        loadUrl("https://duckduckgo.com")
+        loadUrl(HOME_URL)
     }
 
     override fun onBackPressed() {
