@@ -44,9 +44,16 @@ class MainActivity : AppCompatActivity() {
                 btnForward.isEnabled = canGoForward
             }
 
-            override fun onLocationChange(session: GeckoSession, url: String) {
-                urlBar.setText(url)
-                statusBar.text = url
+            override fun onLocationChange(
+                session: GeckoSession,
+                url: String?,
+                permissions: MutableList<GeckoSession.PermissionDelegate.ContentPermission>,
+                hasUserGesture: Boolean
+            ) {
+                url?.let {
+                    urlBar.setText(it)
+                    statusBar.text = it
+                }
             }
         })
 
