@@ -202,15 +202,23 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun initializeNewSession() {
-        val session = GeckoSession()
-        session.setNavigationDelegate(navigationDelegate)
-        session.contentDelegate = contentDelegate
-        session.progressDelegate = progressDelegate
-        // No explicit PermissionDelegate for now – using GeckoView defaults. Add if runtime permission prompts needed.
-        session.open(runtime)
-        geckoView.setSession(session)
-        geckoSession = session
-        Log.d("Surfscape", "GeckoSession opened")
+        Log.d("Surfscape", "Initializing new GeckoSession ...")
+        try {
+            val session = GeckoSession()
+            session.setNavigationDelegate(navigationDelegate)
+            session.contentDelegate = contentDelegate
+            session.progressDelegate = progressDelegate
+            session.open(runtime)
+            geckoView.setSession(session)
+            geckoSession = session
+            Log.d("Surfscape", "GeckoSession opened (active=${'$'}{session.isOpen})")
+        } catch (t: Throwable) {
+            Log.e("Surfscape", "Failed to initialize GeckoSession", t)
+            runOnUiThread {
+                Toast.makeText(this, "Failed to start browser engine: ${'$'}{t.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+            }
+            throw t
+        }
     }
 
     override fun onPause() {

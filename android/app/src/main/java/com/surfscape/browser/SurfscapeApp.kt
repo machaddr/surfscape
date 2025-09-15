@@ -12,12 +12,20 @@ class SurfscapeApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        // Prepare runtime settings (can be expanded with prefs later)
-        val settings = GeckoRuntimeSettings.Builder()
-            //.remoteDebuggingEnabled(BuildConfig.DEBUG) // Uncomment if needed
-            .aboutConfigEnabled(BuildConfig.DEBUG)
-            .build()
-        runtime = GeckoRuntime.create(this, settings)
-        Log.i("Surfscape", "GeckoRuntime initialized")
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            Log.e("Surfscape", "FATAL Uncaught exception in thread ${t.name}", e)
+        }
+        try {
+            val settings = GeckoRuntimeSettings.Builder()
+                //.remoteDebuggingEnabled(BuildConfig.DEBUG)
+                .aboutConfigEnabled(BuildConfig.DEBUG)
+                .build()
+            runtime = GeckoRuntime.create(this, settings)
+            Log.i("Surfscape", "GeckoRuntime initialized")
+        } catch (t: Throwable) {
+            Log.e("Surfscape", "Failed to initialize GeckoRuntime", t)
+            // Re-throw so app doesn't continue in inconsistent state
+            throw t
+        }
     }
 }
