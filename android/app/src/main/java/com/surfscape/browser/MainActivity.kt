@@ -220,7 +220,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onPause() {
         if (this::geckoSession.isInitialized) {
-            try { geckoSession.pause() } catch (t: Throwable) { Log.w("Surfscape", "pause failed", t) }
+            try { geckoSession.setActive(false) } catch (t: Throwable) { Log.w("Surfscape", "setActive(false) failed", t) }
         }
         super.onPause()
     }
@@ -228,7 +228,7 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         if (this::geckoSession.isInitialized) {
-            try { geckoSession.resume() } catch (t: Throwable) { Log.w("Surfscape", "resume failed", t) }
+            try { geckoSession.setActive(true) } catch (t: Throwable) { Log.w("Surfscape", "setActive(true) failed", t) }
         }
     }
 
