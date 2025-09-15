@@ -38,6 +38,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var navigationDelegate: GeckoSession.NavigationDelegate
     private lateinit var contentDelegate: ContentDelegate
     private lateinit var progressDelegate: ProgressDelegate
+    private var firstProgressTimestamp: Long = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -60,6 +61,13 @@ class MainActivity : AppCompatActivity() {
         }
 
         geckoView = findViewById(R.id.geckoView)
+        geckoView.viewTreeObserver.addOnGlobalLayoutListener {
+            val w = geckoView.width
+            val h = geckoView.height
+            if (w > 0 && h > 0) {
+                Log.d("Surfscape", "GeckoView layout size=${w}x${h} visible=${geckoView.isShown}")
+            }
+        }
         val urlBar: EditText = findViewById(R.id.urlBar)
         val btnGo: ImageButton = findViewById(R.id.btnGo)
         val btnBack: ImageButton = findViewById(R.id.btnBack)
@@ -136,12 +144,17 @@ class MainActivity : AppCompatActivity() {
 
         progressDelegate = object : ProgressDelegate {
             override fun onProgressChange(session: GeckoSession, progress: Int) {
+                if (progress > 0 && firstProgressTimestamp == 0L) {
+                    firstProgressTimestamp = System.currentTimeMillis()
+                    Log.d("Surfscape", "First progress >0 at ${firstProgressTimestamp}")
+                }
                 progressBar.visibility = if (progress in 1..99) ProgressBar.VISIBLE else ProgressBar.GONE
                 progressBar.progress = progress
                 if (progress in 1..99) {
                     Log.v("Surfscape", "Progress ${progress}%")
                 } else if (progress == 100) {
-                    Log.d("Surfscape", "Page load complete")
+                    val delta = if (firstProgressTimestamp != 0L) System.currentTimeMillis() - firstProgressTimestamp else -1
+                    Log.d("Surfscape", "Page load complete (deltaFromFirstProgress=${delta}ms)")
                 }
             }
 
@@ -302,5 +315,10 @@ class MainActivity : AppCompatActivity() {
             geckoSession.close()
         }
         super.onDestroy()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        Log.d("Surfscape", "Window focus changed: hasFocus=${hasFocus} sessionActive=${if (this::geckoSession.isInitialized) geckoSession.isOpen else false}")
     }
 }
