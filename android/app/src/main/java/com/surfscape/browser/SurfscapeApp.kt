@@ -20,8 +20,10 @@ class SurfscapeApp : Application() {
             val builder = GeckoRuntimeSettings.Builder()
                 .aboutConfigEnabled(BuildConfig.DEBUG)
                 .arguments(arrayOf())
+            // Newer GeckoView builds may no longer expose direct multiprocess toggle; if needed,
+            // could rely on runtime arguments or prefs. For now we just log the intent.
             if (disableMultiprocess) {
-                builder.multiprocess(false)
+                Log.w("Surfscape", "Requested single-process mode (env SURFSCAPE_DISABLE_MULTIPROCESS=1) but explicit API not available; continuing.")
             }
             val settings = builder.build()
             Log.i("Surfscape", "Creating GeckoRuntime (multiprocess=${'$'}{!disableMultiprocess}) ...")

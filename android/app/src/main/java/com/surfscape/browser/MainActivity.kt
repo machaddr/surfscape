@@ -13,6 +13,7 @@ import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.GeckoSession.ProgressDelegate
 import org.mozilla.geckoview.GeckoSession.ContentDelegate
+import org.mozilla.geckoview.GeckoResult
 import android.util.Log
 import androidx.activity.OnBackPressedCallback
 import com.surfscape.browser.BuildConfig
@@ -102,9 +103,10 @@ class MainActivity : AppCompatActivity() {
             override fun onLoadRequest(
                 session: GeckoSession,
                 request: GeckoSession.NavigationDelegate.LoadRequest
-            ): GeckoSession.NavigationDelegate.LoadRequest? {
+            ): GeckoResult<GeckoSession.NavigationDelegate.AllowOrDeny>? {
                 Log.d("Surfscape", "LoadRequest: ${'$'}{request.uri} where=${'$'}{request.where} external=${'$'}{request.isExternal} userGesture=${'$'}{request.hasUserGesture}")
-                return request
+                // Allow all requests for now
+                return GeckoResult.fromValue(GeckoSession.NavigationDelegate.AllowOrDeny.ALLOW)
             }
         }
 
@@ -162,15 +164,6 @@ class MainActivity : AppCompatActivity() {
                 Log.d("Surfscape", "PageStop success=${'$'}success")
             }
 
-            override fun onLoadError(
-                session: GeckoSession,
-                uri: String?,
-                category: Int,
-                error: Int
-            ) {
-                Log.e("Surfscape", "LoadError uri=${'$'}uri category=${'$'}category error=${'$'}error")
-                runOnUiThread { statusBar.text = "Load error (${ '$'}error)" }
-            }
         }
         initializeNewSession()
 
