@@ -207,9 +207,15 @@ class MainActivity : AppCompatActivity() {
         session.contentDelegate = contentDelegate
         session.progressDelegate = progressDelegate
         session.permissionDelegate = object : GeckoSession.PermissionDelegate {
-            override fun onContentPermissionRequest(session: GeckoSession, uri: String, type: Int, callback: GeckoSession.PermissionDelegate.Callback) {
-                Log.d("Surfscape", "Permission request type=$type uri=$uri (auto-deny for now)")
-                callback.reject() // Future: show UI
+            override fun onContentPermissionRequest(
+                session: GeckoSession,
+                uri: String,
+                type: Int,
+                access: Int,
+                callback: GeckoSession.PermissionDelegate.ContentPermissionCallback
+            ) {
+                Log.d("Surfscape", "Content permission request type=$type access=$access uri=$uri (auto-deny)")
+                callback.reject() // TODO: surface UI for user decision
             }
         }
         session.open(runtime)
