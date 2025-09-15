@@ -27,6 +27,13 @@ class MainActivity : AppCompatActivity() {
 
     private val HOME_URL = "https://html.duckduckgo.com"
 
+    private val prefsName = "surfscape"
+    private val keyLastUrl = "last_url"
+    private val keyCrashCount = "crash_count"
+    private val keyLastCrashTs = "last_crash_ts"
+    private val crashBackoffWindowMs = 5_000L
+    private val crashBackoffMax = 3
+
     // Delegates retained so we can reassign them to a new session cleanly
     private lateinit var navigationDelegate: GeckoSession.NavigationDelegate
     private lateinit var contentDelegate: ContentDelegate
@@ -84,6 +91,9 @@ class MainActivity : AppCompatActivity() {
                     runOnUiThread {
                         urlBar.setText(url)
                         statusBar.text = url
+                        // Persist last successful location
+                        getSharedPreferences(prefsName, MODE_PRIVATE)
+                            .edit().putString(keyLastUrl, url).apply()
                     }
                 }
             }
@@ -98,6 +108,19 @@ class MainActivity : AppCompatActivity() {
 
             override fun onCrash(session: GeckoSession) {
                 Log.e("Surfscape", "GeckoSession crashed; attempting restart")
+                val prefs = getSharedPreferences(prefsName, MODE_PRIVATE)
+                val now = System.currentTimeMillis()
+                val lastTs = prefs.getLong(keyLastCrashTs, 0L)
+                val count = prefs.getInt(keyCrashCount, 0)
+                val newCount = if (now - lastTs < crashBackoffWindowMs) count + 1 else 1
+                prefs.edit().putLong(keyLastCrashTs, now).putInt(keyCrashCount, newCount).apply()
+                if (newCount > crashBackoffMax) {
+                    Log.e("Surfscape", "Crash loop detected (>$crashBackoffMax in window); not restarting automatically.")
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "Browser crashed repeatedly; restart app.", Toast.LENGTH_LONG).show()
+                    }
+                    return
+                }
                 runOnUiThread {
                     try {
                         geckoSession.close()
@@ -163,15 +186,19 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        // Initial homepage
-        loadUrl(HOME_URL)
+        // Initial page: restore last URL if present
+        val startUrl = getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getString(keyLastUrl, HOME_URL) ?: HOME_URL
+        loadUrl(startUrl)
     }
 
     private fun restartGeckoSession() {
         Log.i("Surfscape", "Restarting GeckoSession")
         try { geckoSession.close() } catch (_: Exception) { }
         initializeNewSession()
-        geckoSession.loadUri(HOME_URL)
+        val restoreUrl = getSharedPreferences(prefsName, MODE_PRIVATE)
+            .getString(keyLastUrl, HOME_URL) ?: HOME_URL
+        geckoSession.loadUri(restoreUrl)
     }
 
     private fun initializeNewSession() {
@@ -179,10 +206,35 @@ class MainActivity : AppCompatActivity() {
         session.setNavigationDelegate(navigationDelegate)
         session.contentDelegate = contentDelegate
         session.progressDelegate = progressDelegate
+        session.permissionDelegate = object : GeckoSession.PermissionDelegate {
+            override fun onContentPermissionRequest(session: GeckoSession, uri: String, type: Int, callback: GeckoSession.PermissionDelegate.Callback) {
+                Log.d("Surfscape", "Permission request type=$type uri=$uri (auto-deny for now)")
+                callback.reject() // Future: show UI
+            }
+        }
         session.open(runtime)
         geckoView.setSession(session)
         geckoSession = session
         Log.d("Surfscape", "GeckoSession opened")
+    }
+
+    override fun onPause() {
+        if (this::geckoSession.isInitialized) {
+            try { geckoSession.pause() } catch (t: Throwable) { Log.w("Surfscape", "pause failed", t) }
+        }
+        super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (this::geckoSession.isInitialized) {
+            try { geckoSession.resume() } catch (t: Throwable) { Log.w("Surfscape", "resume failed", t) }
+        }
+    }
+
+    override fun onLowMemory() {
+        super.onLowMemory()
+        Log.w("Surfscape", "System low memory signaled")
     }
 
     override fun onDestroy() {
