@@ -28,9 +28,17 @@ class SurfscapeApp : Application() {
         })
         try {
             val disableMultiprocess = System.getenv("SURFSCAPE_DISABLE_MULTIPROCESS") == "1"
+            val forceSoftware = System.getenv("SURFSCAPE_FORCE_SOFTWARE") == "1"
+            val argList = mutableListOf<String>()
+            if (forceSoftware) {
+                // Force software WebRender if supported.
+                argList.add("-prefs")
+                argList.add("gfx.webrender.software=true")
+                Log.w("Surfscape", "Forcing software WebRender (SURFSCAPE_FORCE_SOFTWARE=1)")
+            }
             val builder = GeckoRuntimeSettings.Builder()
                 .aboutConfigEnabled(BuildConfig.DEBUG)
-                .arguments(arrayOf())
+                .arguments(argList.toTypedArray())
             // Newer GeckoView builds may no longer expose direct multiprocess toggle; if needed,
             // could rely on runtime arguments or prefs. For now we just log the intent.
             if (disableMultiprocess) {

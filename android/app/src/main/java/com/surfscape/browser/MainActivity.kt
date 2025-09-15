@@ -254,6 +254,21 @@ class MainActivity : AppCompatActivity() {
             // If needed later, use a temporary about:blank load and ContentDelegate to inspect UA via headers
             // or inject a WebExtension. For now just log that the session is open.
             Log.d("Surfscape", "GeckoSession JS eval skipped (API removed).")
+
+            // Stage 1: load about:blank explicitly and set a watchdog.
+            try {
+                session.loadUri("about:blank")
+                Log.d("Surfscape", "Loaded about:blank as staging page")
+            } catch (e: Throwable) {
+                Log.w("Surfscape", "Failed to load about:blank staging page", e)
+            }
+            // Watchdog: if we never get a progress >0 within 5s, log a hard warning.
+            android.os.Handler(mainLooper).postDelayed({
+                if (this::geckoSession.isInitialized && geckoSession === session) {
+                    // If still on about:blank and no delegates fired, we may have a rendering stall.
+                    Log.w("Surfscape", "Watchdog: no navigation progress after 5s; possible rendering stall. Consider setting SURFSCAPE_FORCE_SOFTWARE=1")
+                }
+            }, 5000)
         } catch (t: Throwable) {
             Log.e("Surfscape", "Failed to initialize GeckoSession", t)
             runOnUiThread {
