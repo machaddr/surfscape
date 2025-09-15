@@ -76,7 +76,7 @@ android {
 val geckoviewVersion: String by rootProject.extra
 
 dependencies {
-    implementation(platform("org.jetbrains.kotlin:kotlin-bom:2.2.0"))
+    implementation(platform("org.jetbrains.kotlin:kotlin-bom:2.0.20"))
     implementation("org.mozilla.geckoview:geckoview:$geckoviewVersion")
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
