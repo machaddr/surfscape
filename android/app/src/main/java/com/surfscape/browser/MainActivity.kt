@@ -206,19 +206,7 @@ class MainActivity : AppCompatActivity() {
         session.setNavigationDelegate(navigationDelegate)
         session.contentDelegate = contentDelegate
         session.progressDelegate = progressDelegate
-        session.permissionDelegate = object : GeckoSession.PermissionDelegate {
-            // GeckoView 140+: Content permission request callback may have been removed/changed.
-            // Implement only currently supported callbacks we care about; auto-deny others later if needed.
-            override fun onAndroidPermissionsRequest(
-                session: GeckoSession,
-                permissions: Array<out String>,
-                callback: GeckoSession.PermissionDelegate.Callback
-            ) {
-                // For now we deny runtime Android permission requests to keep minimal surface.
-                Log.d("Surfscape", "Android permissions request ${'$'}{permissions.toList()} (auto-deny)")
-                callback.reject()
-            }
-        }
+        // No explicit PermissionDelegate for now – using GeckoView defaults. Add if runtime permission prompts needed.
         session.open(runtime)
         geckoView.setSession(session)
         geckoSession = session
