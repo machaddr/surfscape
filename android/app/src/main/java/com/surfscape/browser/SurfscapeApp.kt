@@ -16,15 +16,21 @@ class SurfscapeApp : Application() {
             Log.e("Surfscape", "FATAL Uncaught exception in thread ${t.name}", e)
         }
         try {
-            val settings = GeckoRuntimeSettings.Builder()
-                //.remoteDebuggingEnabled(BuildConfig.DEBUG)
+            val disableMultiprocess = System.getenv("SURFSCAPE_DISABLE_MULTIPROCESS") == "1"
+            val builder = GeckoRuntimeSettings.Builder()
                 .aboutConfigEnabled(BuildConfig.DEBUG)
-                .build()
+                .arguments(arrayOf())
+            if (disableMultiprocess) {
+                builder.multiprocess(false)
+            }
+            val settings = builder.build()
+            Log.i("Surfscape", "Creating GeckoRuntime (multiprocess=${'$'}{!disableMultiprocess}) ...")
+            val start = System.currentTimeMillis()
             runtime = GeckoRuntime.create(this, settings)
-            Log.i("Surfscape", "GeckoRuntime initialized")
+            val dur = System.currentTimeMillis() - start
+            Log.i("Surfscape", "GeckoRuntime initialized in ${'$'}dur ms")
         } catch (t: Throwable) {
             Log.e("Surfscape", "Failed to initialize GeckoRuntime", t)
-            // Re-throw so app doesn't continue in inconsistent state
             throw t
         }
     }

@@ -88,6 +88,7 @@ class MainActivity : AppCompatActivity() {
                 hasUserGesture: Boolean
             ) {
                 if (url != null) {
+                    Log.d("Surfscape", "LocationChange: ${'$'}url")
                     runOnUiThread {
                         urlBar.setText(url)
                         statusBar.text = url
@@ -96,6 +97,14 @@ class MainActivity : AppCompatActivity() {
                             .edit().putString(keyLastUrl, url).apply()
                     }
                 }
+            }
+
+            override fun onLoadRequest(
+                session: GeckoSession,
+                request: GeckoSession.NavigationDelegate.LoadRequest
+            ): GeckoSession.NavigationDelegate.LoadRequest? {
+                Log.d("Surfscape", "LoadRequest: ${'$'}{request.uri} where=${'$'}{request.where} external=${'$'}{request.isExternal} userGesture=${'$'}{request.hasUserGesture}")
+                return request
             }
         }
 
@@ -134,15 +143,42 @@ class MainActivity : AppCompatActivity() {
             override fun onProgressChange(session: GeckoSession, progress: Int) {
                 progressBar.visibility = if (progress in 1..99) ProgressBar.VISIBLE else ProgressBar.GONE
                 progressBar.progress = progress
+                if (progress in 1..99) {
+                    Log.v("Surfscape", "Progress ${'$'}progress%")
+                } else if (progress == 100) {
+                    Log.d("Surfscape", "Page load complete")
+                }
             }
 
             override fun onSecurityChange(session: GeckoSession, securityInfo: ProgressDelegate.SecurityInformation) {
                 // Could update a lock icon later
             }
+
+            override fun onPageStart(session: GeckoSession, url: String) {
+                Log.d("Surfscape", "PageStart: ${'$'}url")
+            }
+
+            override fun onPageStop(session: GeckoSession, success: Boolean) {
+                Log.d("Surfscape", "PageStop success=${'$'}success")
+            }
+
+            override fun onLoadError(
+                session: GeckoSession,
+                uri: String?,
+                category: Int,
+                error: Int
+            ) {
+                Log.e("Surfscape", "LoadError uri=${'$'}uri category=${'$'}category error=${'$'}error")
+                runOnUiThread { statusBar.text = "Load error (${ '$'}error)" }
+            }
         }
         initializeNewSession()
 
         fun loadUrl(raw: String) {
+            if (!this::geckoSession.isInitialized || !geckoSession.isOpen) {
+                Log.w("Surfscape", "loadUrl called before session ready; ignoring: ${'$'}raw")
+                return
+            }
             val trimmed = raw.trim()
             if (trimmed.isEmpty()) return
             val isLikelyUrl = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://").containsMatchIn(trimmed) ||
@@ -189,6 +225,7 @@ class MainActivity : AppCompatActivity() {
         // Initial page: restore last URL if present
         val startUrl = getSharedPreferences(prefsName, MODE_PRIVATE)
             .getString(keyLastUrl, HOME_URL) ?: HOME_URL
+        Log.d("Surfscape", "Initial navigation to ${'$'}startUrl")
         loadUrl(startUrl)
     }
 
@@ -211,7 +248,7 @@ class MainActivity : AppCompatActivity() {
             session.open(runtime)
             geckoView.setSession(session)
             geckoSession = session
-            Log.d("Surfscape", "GeckoSession opened (active=${'$'}{session.isOpen})")
+            Log.d("Surfscape", "GeckoSession opened (active=${'$'}{session.isOpen}) runtimeMultiprocess=${'$'}{runtime.settings.useMultiprocess()} ")
         } catch (t: Throwable) {
             Log.e("Surfscape", "Failed to initialize GeckoSession", t)
             runOnUiThread {
