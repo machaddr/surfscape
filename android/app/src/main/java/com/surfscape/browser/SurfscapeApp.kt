@@ -15,6 +15,17 @@ class SurfscapeApp : Application() {
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
             Log.e("Surfscape", "FATAL Uncaught exception in thread ${t.name}", e)
         }
+        registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
+            override fun onActivityCreated(activity: android.app.Activity, savedInstanceState: android.os.Bundle?) {
+                Log.d("Surfscape", "Activity created: ${activity.localClassName}")
+            }
+            override fun onActivityStarted(activity: android.app.Activity) { Log.d("Surfscape", "Activity started: ${activity.localClassName}") }
+            override fun onActivityResumed(activity: android.app.Activity) { Log.d("Surfscape", "Activity resumed: ${activity.localClassName}") }
+            override fun onActivityPaused(activity: android.app.Activity) { Log.d("Surfscape", "Activity paused: ${activity.localClassName}") }
+            override fun onActivityStopped(activity: android.app.Activity) { Log.d("Surfscape", "Activity stopped: ${activity.localClassName}") }
+            override fun onActivitySaveInstanceState(activity: android.app.Activity, outState: android.os.Bundle) { }
+            override fun onActivityDestroyed(activity: android.app.Activity) { Log.d("Surfscape", "Activity destroyed: ${activity.localClassName}") }
+        })
         try {
             val disableMultiprocess = System.getenv("SURFSCAPE_DISABLE_MULTIPROCESS") == "1"
             val builder = GeckoRuntimeSettings.Builder()
@@ -26,11 +37,11 @@ class SurfscapeApp : Application() {
                 Log.w("Surfscape", "Requested single-process mode (env SURFSCAPE_DISABLE_MULTIPROCESS=1) but explicit API not available; continuing.")
             }
             val settings = builder.build()
-            Log.i("Surfscape", "Creating GeckoRuntime (multiprocess=${'$'}{!disableMultiprocess}) ...")
+            Log.i("Surfscape", "Creating GeckoRuntime (multiprocess=${!disableMultiprocess}) ...")
             val start = System.currentTimeMillis()
             runtime = GeckoRuntime.create(this, settings)
             val dur = System.currentTimeMillis() - start
-            Log.i("Surfscape", "GeckoRuntime initialized in ${'$'}dur ms")
+            Log.i("Surfscape", "GeckoRuntime initialized in ${dur} ms")
         } catch (t: Throwable) {
             Log.e("Surfscape", "Failed to initialize GeckoRuntime", t)
             throw t

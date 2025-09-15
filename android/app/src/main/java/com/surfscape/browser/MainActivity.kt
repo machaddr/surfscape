@@ -89,7 +89,7 @@ class MainActivity : AppCompatActivity() {
                 hasUserGesture: Boolean
             ) {
                 if (url != null) {
-                    Log.d("Surfscape", "LocationChange: ${'$'}url")
+                    Log.d("Surfscape", "LocationChange: ${url}")
                     runOnUiThread {
                         urlBar.setText(url)
                         statusBar.text = url
@@ -140,7 +140,7 @@ class MainActivity : AppCompatActivity() {
                 progressBar.visibility = if (progress in 1..99) ProgressBar.VISIBLE else ProgressBar.GONE
                 progressBar.progress = progress
                 if (progress in 1..99) {
-                    Log.v("Surfscape", "Progress ${'$'}progress%")
+                    Log.v("Surfscape", "Progress ${progress}%")
                 } else if (progress == 100) {
                     Log.d("Surfscape", "Page load complete")
                 }
@@ -151,11 +151,11 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onPageStart(session: GeckoSession, url: String) {
-                Log.d("Surfscape", "PageStart: ${'$'}url")
+                Log.d("Surfscape", "PageStart: ${url}")
             }
 
             override fun onPageStop(session: GeckoSession, success: Boolean) {
-                Log.d("Surfscape", "PageStop success=${'$'}success")
+                Log.d("Surfscape", "PageStop success=${success}")
             }
 
         }
@@ -163,7 +163,7 @@ class MainActivity : AppCompatActivity() {
 
         fun loadUrl(raw: String) {
             if (!this::geckoSession.isInitialized || !geckoSession.isOpen) {
-                Log.w("Surfscape", "loadUrl called before session ready; ignoring: ${'$'}raw")
+                Log.w("Surfscape", "loadUrl called before session ready; ignoring: ${raw}")
                 return
             }
             val trimmed = raw.trim()
@@ -212,7 +212,7 @@ class MainActivity : AppCompatActivity() {
         // Initial page: restore last URL if present
         val startUrl = getSharedPreferences(prefsName, MODE_PRIVATE)
             .getString(keyLastUrl, HOME_URL) ?: HOME_URL
-        Log.d("Surfscape", "Initial navigation to ${'$'}startUrl")
+    Log.d("Surfscape", "Initial navigation to ${startUrl}")
         loadUrl(startUrl)
     }
 
@@ -235,11 +235,11 @@ class MainActivity : AppCompatActivity() {
             session.open(runtime)
             geckoView.setSession(session)
             geckoSession = session
-            Log.d("Surfscape", "GeckoSession opened (active=${'$'}{session.isOpen}) runtimeMultiprocess=${'$'}{runtime.settings.useMultiprocess()} ")
+            Log.d("Surfscape", "GeckoSession opened (active=${session.isOpen}) runtimeMultiprocess=${runtime.settings.useMultiprocess()} ")
         } catch (t: Throwable) {
             Log.e("Surfscape", "Failed to initialize GeckoSession", t)
             runOnUiThread {
-                Toast.makeText(this, "Failed to start browser engine: ${'$'}{t.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+                Toast.makeText(this, "Failed to start browser engine: ${t.javaClass.simpleName}", Toast.LENGTH_LONG).show()
             }
             throw t
         }
