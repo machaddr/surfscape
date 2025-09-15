@@ -13,7 +13,6 @@ import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
 import org.mozilla.geckoview.GeckoSession.ProgressDelegate
 import org.mozilla.geckoview.GeckoSession.ContentDelegate
-import org.mozilla.geckoview.GeckoResult
 import android.util.Log
 import androidx.activity.OnBackPressedCallback
 import com.surfscape.browser.BuildConfig
@@ -235,7 +234,7 @@ class MainActivity : AppCompatActivity() {
             session.open(runtime)
             geckoView.setSession(session)
             geckoSession = session
-            Log.d("Surfscape", "GeckoSession opened (active=${session.isOpen}) runtimeMultiprocess=${runtime.settings.useMultiprocess()} ")
+            Log.d("Surfscape", "GeckoSession opened (active=${session.isOpen})")
         } catch (t: Throwable) {
             Log.e("Surfscape", "Failed to initialize GeckoSession", t)
             runOnUiThread {
