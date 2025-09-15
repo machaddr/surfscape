@@ -99,15 +99,9 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
             }
-
-            override fun onLoadRequest(
-                session: GeckoSession,
-                request: GeckoSession.NavigationDelegate.LoadRequest
-            ): GeckoResult<GeckoSession.NavigationDelegate.AllowOrDeny>? {
-                Log.d("Surfscape", "LoadRequest: ${'$'}{request.uri} where=${'$'}{request.where} external=${'$'}{request.isExternal} userGesture=${'$'}{request.hasUserGesture}")
-                // Allow all requests for now
-                return GeckoResult.fromValue(GeckoSession.NavigationDelegate.AllowOrDeny.ALLOW)
-            }
+            // NOTE: onLoadRequest override removed because the current GeckoView
+            // version (140.x) changed its signature/types. Default behavior (allow)
+            // is acceptable for now; reintroduce later if filtering needed.
         }
 
         contentDelegate = object : ContentDelegate {
