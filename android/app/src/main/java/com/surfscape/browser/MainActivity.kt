@@ -250,15 +250,10 @@ class MainActivity : AppCompatActivity() {
             geckoView.setSession(session)
             geckoSession = session
             Log.d("Surfscape", "GeckoSession opened (active=${session.isOpen})")
-            try {
-                session.evaluateJS("navigator.userAgent").then({ value ->
-                    Log.d("Surfscape", "UserAgent: ${'$'}value")
-                }, { e ->
-                    Log.w("Surfscape", "Failed to get userAgent: ${'$'}e")
-                })
-            } catch (e: Exception) {
-                Log.w("Surfscape", "evaluateJS failed early: ${e.javaClass.simpleName}")
-            }
+            // GeckoView 140: evaluateJS API removed/changed. Skipping direct UA eval.
+            // If needed later, use a temporary about:blank load and ContentDelegate to inspect UA via headers
+            // or inject a WebExtension. For now just log that the session is open.
+            Log.d("Surfscape", "GeckoSession JS eval skipped (API removed).")
         } catch (t: Throwable) {
             Log.e("Surfscape", "Failed to initialize GeckoSession", t)
             runOnUiThread {
