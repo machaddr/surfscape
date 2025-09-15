@@ -34,7 +34,12 @@ class SurfscapeApp : Application() {
                 // Force software WebRender if supported.
                 argList.add("-prefs")
                 argList.add("gfx.webrender.software=true")
-                Log.w("Surfscape", "Forcing software WebRender (SURFSCAPE_FORCE_SOFTWARE=1)")
+                // Also disable GPU process explicitly which appears to fail in logs.
+                argList.add("layers.gpu-process.enabled=false")
+                // Disable HW acceleration fallback paths and video decode to reduce GPU usage.
+                argList.add("layers.acceleration.disabled=true")
+                argList.add("media.hardware-video-decoding.enabled=false")
+                Log.w("Surfscape", "Forcing software rendering stack (software WR + no GPU process)")
             }
             val builder = GeckoRuntimeSettings.Builder()
                 .aboutConfigEnabled(BuildConfig.DEBUG)
