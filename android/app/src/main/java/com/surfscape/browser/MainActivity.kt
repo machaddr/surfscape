@@ -209,10 +209,25 @@ class MainActivity : AppCompatActivity() {
         })
 
         // Initial page: restore last URL if present
+        val selfTest = System.getenv("SURFSCAPE_SELFTEST") == "1"
         val startUrl = getSharedPreferences(prefsName, MODE_PRIVATE)
             .getString(keyLastUrl, HOME_URL) ?: HOME_URL
-    Log.d("Surfscape", "Initial navigation to ${startUrl}")
-        loadUrl(startUrl)
+        if (selfTest) {
+            val testHtml = "<html><body style='font-family:sans-serif'><h3>Surfscape Self-Test</h3><p>If you can read this, GeckoView rendered a local page.</p><p>User Agent should appear below after JS runs.</p><div id='ua'></div><script>document.getElementById('ua').textContent = navigator.userAgent;</script></body></html>"
+            val dataUrl = "data:text/html;base64," + android.util.Base64.encodeToString(testHtml.toByteArray(), android.util.Base64.NO_WRAP)
+            Log.d("Surfscape", "Self-test mode: loading inline data URL then will navigate to ${startUrl}")
+            geckoSession.loadUri(dataUrl)
+            // Chain real navigation after short delay
+            android.os.Handler(mainLooper).postDelayed({
+                if (this::geckoSession.isInitialized && geckoSession.isOpen) {
+                    Log.d("Surfscape", "Self-test follow-up: navigating to ${startUrl}")
+                    geckoSession.loadUri(startUrl)
+                }
+            }, 1500)
+        } else {
+            Log.d("Surfscape", "Initial navigation to ${startUrl}")
+            loadUrl(startUrl)
+        }
     }
 
     private fun restartGeckoSession() {
@@ -235,6 +250,15 @@ class MainActivity : AppCompatActivity() {
             geckoView.setSession(session)
             geckoSession = session
             Log.d("Surfscape", "GeckoSession opened (active=${session.isOpen})")
+            try {
+                session.evaluateJS("navigator.userAgent").then({ value ->
+                    Log.d("Surfscape", "UserAgent: ${'$'}value")
+                }, { e ->
+                    Log.w("Surfscape", "Failed to get userAgent: ${'$'}e")
+                })
+            } catch (e: Exception) {
+                Log.w("Surfscape", "evaluateJS failed early: ${e.javaClass.simpleName}")
+            }
         } catch (t: Throwable) {
             Log.e("Surfscape", "Failed to initialize GeckoSession", t)
             runOnUiThread {
