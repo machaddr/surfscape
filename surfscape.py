@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import os, sys, json, asyncio, aiohttp, re, pyaudio, speech_recognition as sr, anthropic, markdown
+import argparse, concurrent.futures, multiprocessing
 from PyQt6.QtCore import QUrl, Qt , QDateTime, QThread, pyqtSignal, QObject, QStandardPaths, QTimer, QSize
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog, QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QCheckBox, QSpinBox, QComboBox, QSlider, QGroupBox, QGridLayout, QScrollArea, QTextEdit, QFrame, QWidget, QSplitter
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
@@ -10,6 +11,75 @@ from PyQt6.QtNetwork import QNetworkCookie, QNetworkProxy, QNetworkAccessManager
 from PyQt6.QtWebEngineCore import QWebEngineUrlRequestInterceptor, QWebEngineProfile, QWebEngineSettings
 from adblockparser import AdblockRules
 
+# --- Multi-core / CPU pool utilities ---------------------------------------------------------
+
+def _markdown_convert_task(text: str, enable_markdown: bool):
+    """Isolated task function executed in a separate process for heavy markdown conversion.
+    We re-import modules inside the process space to avoid large object pickling overhead.
+    Returns HTML string.
+    """
+    try:
+        if enable_markdown:
+            try:
+                import markdown as _md
+                return _md.markdown(text, extensions=['fenced_code'])
+            except Exception:
+                pass
+        # Fallback simple escaping if markdown fails inside worker
+        import html
+        return '<pre>' + html.escape(text) + '</pre>'
+    except Exception as e:
+        return f"<pre>Markdown render error: {e}</pre>"
+
+class CPUPool:
+    """Lightweight wrapper around ProcessPoolExecutor to offload CPU-bound work.
+
+    We keep this intentionally small to avoid complex cross-process state. Tasks must be
+    pure functions returning serializable results.
+    """
+    def __init__(self, workers: int | None):
+        self.workers = max(1, int(workers or 1))
+        # Only create a process pool if we have >1 workers (avoids fork cost on low spec)
+        self._executor = None
+        if self.workers > 1:
+            # "spawn" is safer with PyQt on some platforms; respect existing start method
+            if multiprocessing.get_start_method(allow_none=True) is None:
+                try:
+                    multiprocessing.set_start_method('spawn')
+                except RuntimeError:
+                    pass
+            self._executor = concurrent.futures.ProcessPoolExecutor(max_workers=self.workers)
+
+    def submit(self, fn, *args, callback=None):
+        """Submit a CPU task. If no pool, executes synchronously in main process."""
+        if self._executor is None:
+            result = fn(*args)
+            if callback:
+                # Defer callback to GUI loop if available
+                try:
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(0, lambda r=result: callback(r))
+                except Exception:
+                    callback(result)
+            return
+
+        fut = self._executor.submit(fn, *args)
+        if callback:
+            from PyQt6.QtCore import QTimer
+            def _done(f):
+                try:
+                    res = f.result()
+                except Exception as e:
+                    res = f"<pre>Worker error: {e}</pre>"
+                QTimer.singleShot(0, lambda r=res: callback(r))
+            fut.add_done_callback(_done)
+        return fut
+
+    def shutdown(self):
+        if self._executor:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+
+
 class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
     def __init__(self, browser, ad_blocker_rules=None, is_private=False, parent=None):
         super().__init__(parent)
@@ -17,12 +87,19 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
         self.request_count = 0
         self.ad_blocker_rules = ad_blocker_rules
         self.is_private = is_private
+        # Fast domain-level block set populated asynchronously (optional)
+        self.domain_block_set = set()
+        # Simple LRU cache for rule decisions to reduce repeated expensive checks
+        self._decision_cache = {}
+        self._decision_cache_order = []
+        self._cache_limit = 5000
     
     def interceptRequest(self, info):
         # Capture network request details for DevTools
         self.request_count += 1
         
         url = info.requestUrl().toString()
+        host = info.requestUrl().host()
         method = "GET"  # Default method, actual method detection requires more complex handling
         request_type = self._get_request_type(info.resourceType())
         
@@ -37,25 +114,51 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
                 time="--"
             )
         
-        # Ad blocking using EasyList only
+        # Fast domain-level blocking (optional) before full rule evaluation
+        if getattr(self.browser, 'fast_adblock', False) and host and host in self.domain_block_set:
+            if hasattr(self.browser, 'dev_tools') and self.browser.dev_tools:
+                self.browser.dev_tools.add_network_request(
+                    url=url,
+                    status="Blocked (Domain)",
+                    request_type=request_type,
+                    initiator="AdBlocker",
+                    size="0 B",
+                    time="0 ms"
+                )
+            info.block(True)
+            return
+
+        # Cached decision check
+        if url in self._decision_cache:
+            if self._decision_cache[url]:
+                info.block(True)
+            return
+
+        # Full rule evaluation
         if self.ad_blocker_rules:
+            blocked = False
             try:
-                if self.ad_blocker_rules.should_block(url):
-                    # Update DevTools to show blocked request
-                    if hasattr(self.browser, 'dev_tools') and self.browser.dev_tools:
-                        self.browser.dev_tools.add_network_request(
-                            url=url,
-                            status="Blocked (EasyList)",
-                            request_type=request_type,
-                            initiator="AdBlocker",
-                            size="0 B",
-                            time="0 ms"
-                        )
-                    info.block(True)
-                    return
+                blocked = self.ad_blocker_rules.should_block(url)
             except Exception:
-                # If ad blocking fails, continue with normal request
-                pass
+                blocked = False
+            # Update cache
+            self._decision_cache[url] = blocked
+            self._decision_cache_order.append(url)
+            if len(self._decision_cache_order) > self._cache_limit:
+                old = self._decision_cache_order.pop(0)
+                self._decision_cache.pop(old, None)
+            if blocked:
+                if hasattr(self.browser, 'dev_tools') and self.browser.dev_tools:
+                    self.browser.dev_tools.add_network_request(
+                        url=url,
+                        status="Blocked (EasyList)",
+                        request_type=request_type,
+                        initiator="AdBlocker",
+                        size="0 B",
+                        time="0 ms"
+                    )
+                info.block(True)
+                return
         
         # Continue with normal request processing
     
@@ -3114,12 +3217,16 @@ class ClaudeAIWidget(QWidget):
         Convert markdown text to HTML using a markdown transpiler.
         Uses the markdown library if available, otherwise falls back to basic formatter.
         """
+        # Heuristic: offload large markdown blocks to background process pool
+        if getattr(self, 'cpu_pool', None) and text and len(text) > 4000:
+            self._offload_markdown(text)
+            return "<i>Rendering large markdown in background...</i>"
+
         if self.markdown_module:
             try:
-                # Convert markdown to HTML with code highlighting
                 html = self.markdown_module.markdown(text, extensions=['fenced_code'])
                 return html
-            except:
+            except Exception:
                 pass  # Fall back to basic formatter on error
         
         # Fallback to basic formatter
@@ -3174,6 +3281,19 @@ class ClaudeAIWidget(QWidget):
             f"<span style='color: red; font-weight: bold;'>Human:</span> {user_input}<br><br>"
             f"<span style='color: blue; font-weight: bold;'>Assistant:</span> {formatted_response}<br>"
         )
+    def _offload_markdown(self, md_text: str):
+        if not getattr(self, 'cpu_pool', None):
+            return
+        enable_md = bool(getattr(self, 'markdown_module', None))
+        def _apply(html):
+            try:
+                self.output_window.append(html)
+            except Exception:
+                pass
+        try:
+            self.cpu_pool.submit(_markdown_convert_task, md_text, enable_md, callback=_apply)
+        except Exception as e:
+            self.output_window.append(f"<pre>Background render failed: {e}</pre>")
 
 class AdBlockerWorker:
     def __init__(self, rules):
@@ -3190,10 +3310,12 @@ class AdBlockerWorker:
         self.rules = AdblockRules(raw_rules)
 
 class Browser(QMainWindow):
-    def __init__(self):
+    def __init__(self, cpu_pool=None):
         super().__init__()
         self.setWindowTitle("surfscape")
         self.setMinimumSize(800, 640)
+        self.cpu_pool = cpu_pool  # Multi-core pool for offloading CPU tasks
+        self.fast_adblock = True  # Enable fast domain prefilter
         
         # Set application icon if available
         try:
@@ -3248,17 +3370,9 @@ class Browser(QMainWindow):
         self.url_bar = QLineEdit()
         self.url_bar.setPlaceholderText("Enter URL or Search Query")
 
-        # Set up ad blocker (enabled by default)
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            worker = AdBlockerWorker(None)
-            loop.run_until_complete(worker.download_adblock_lists())
-            self.ad_blocker_rules = worker.rules
-            print(f"Ad blocker initialized with {len(self.ad_blocker_rules.rules) if hasattr(self.ad_blocker_rules, 'rules') else 'unknown'} rules")
-        except Exception as e:
-            print(f"Failed to initialize ad blocker: {e}")
-            self.ad_blocker_rules = None
+        # Kick off ad blocker initialization (async/offloaded)
+        self.ad_blocker_rules = None
+        self._init_adblock_async()
         # Favicon cache and fetcher
         self._favicon_cache: dict[str, QIcon] = {}
         self._favicon_pending: dict[str, list] = {}
@@ -5074,6 +5188,80 @@ class Browser(QMainWindow):
         
         super().closeEvent(event)
 
+    def _init_adblock_async(self):
+        """Initialize ad blocker lists asynchronously, using CPU pool if available.
+        Steps:
+          1. Download EasyList asynchronously (aiohttp in dedicated event loop)
+          2. In process pool, build AdblockRules and extract a fast domain block set
+        """
+        async def _download():
+            url = "https://easylist.to/easylist/easylist.txt"
+            try:
+                import aiohttp
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, timeout=30) as resp:
+                        text = await resp.text()
+                        return text
+            except Exception as e:
+                print(f"Adblock download failed: {e}")
+                return None
+
+        def _prepare_rules(easylist_text: str):
+            if not easylist_text:
+                return None, []
+            lines = easylist_text.splitlines()
+            try:
+                rules = AdblockRules(lines)
+            except Exception as e:
+                return None, []
+            # Extract host-like tokens for prefilter
+            domain_like = set()
+            host_re = re.compile(r"^\|\|([a-z0-9.-]+)\^")
+            for line in lines:
+                m = host_re.match(line)
+                if m:
+                    domain_like.add(m.group(1))
+            return rules, list(domain_like)
+
+        async def orchestrate():
+            txt = await _download()
+            if txt is None:
+                return
+            # Offload parsing to pool if available
+            if self.cpu_pool and self.cpu_pool.workers > 1:
+                self.cpu_pool.submit(_prepare_rules, txt, callback=self._receive_adblock_data)
+            else:
+                rules, domains = _prepare_rules(txt)
+                self._receive_adblock_data((rules, domains))
+
+        # Run orchestrate in temporary loop (non-blocking to UI)
+        def _runner():
+            try:
+                loop = asyncio.new_event_loop()
+                loop.run_until_complete(orchestrate())
+                loop.close()
+            except Exception as e:
+                print(f"Adblock init orchestration failed: {e}")
+        # Use a QThread-like lightweight approach via ProcessPool? Simpler: background thread
+        import threading
+        threading.Thread(target=_runner, daemon=True).start()
+
+    def _receive_adblock_data(self, payload):
+        try:
+            if isinstance(payload, tuple):
+                rules, domains = payload
+            else:
+                rules, domains = payload, []
+            if rules:
+                self.ad_blocker_rules = rules
+                if hasattr(self, 'network_interceptor'):
+                    self.network_interceptor.ad_blocker_rules = rules
+                if domains and hasattr(self, 'network_interceptor'):
+                    self.network_interceptor.domain_block_set = set(domains)
+                print(f"Ad blocker ready: {len(getattr(rules, 'rules', []))} rules, {len(domains)} fast domains")
+        except Exception as e:
+            print(f"Failed applying adblock data: {e}")
+
     def show_about_dialog(self):
         license_text = """
         surfscape - Your Own Way to Navigate the Web with Freedom
@@ -5098,8 +5286,21 @@ class Browser(QMainWindow):
         QMessageBox.about(self, "About surfscape", license_text)
 
 if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    window = Browser()
+    parser = argparse.ArgumentParser(description="Surfscape Browser")
+    parser.add_argument("--workers", type=int, default=os.cpu_count() or 1,
+                        help="Number of worker processes for CPU-bound tasks (markdown rendering, future features). Set 1 to disable multiprocessing.")
+    args, unknown = parser.parse_known_args()
+    # Preserve compatibility with PyQt argument parsing by trimming sys.argv
+    qt_argv = [sys.argv[0]] + [a for a in unknown]
+    app = QApplication(qt_argv)
+
+    cpu_pool = CPUPool(args.workers)
+    window = Browser(cpu_pool=cpu_pool)
     window.show()
-    sys.exit(app.exec())
+    exit_code = app.exec()
+    try:
+        cpu_pool.shutdown()
+    except Exception:
+        pass
+    sys.exit(exit_code)
     
