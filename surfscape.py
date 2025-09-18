@@ -74,21 +74,6 @@ class CPUPool:
             self._executor.shutdown(wait=False, cancel_futures=True)
 
 
-# --- Adblock preparation worker (must be top-level for ProcessPoolExecutor pickling) ---
-def prepare_adblock_lines(easy_text: str):
-    """Return (lines, domain_list) from combined filter text.
-    Extracts ||host^ patterns into domain_list for fast prefilter.
-    """
-    if not easy_text:
-        return [], []
-    lines = easy_text.splitlines()
-    domain_like = set()
-    host_re = re.compile(r"^\|\|([a-z0-9.-]+)\^")
-    for line in lines:
-        m = host_re.match(line)
-        if m:
-            domain_like.add(m.group(1).lower())
-    return lines, list(domain_like)
 
 
 class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
@@ -3378,18 +3363,40 @@ class ClaudeAIWidget(QWidget):
             self.output_window.append(f"<pre>Background render failed: {e}</pre>")
 
 class AdBlockerWorker:
-    def __init__(self, rules):
+    def __init__(self, rules=None):
         self.rules = rules
 
     async def download_adblock_lists(self):
-        easylist_url = "https://easylist.to/easylist/easylist.txt"
+        """Download EasyList + EasyPrivacy and build AdblockRules."""
+        urls = [
+            "https://easylist.to/easylist/easylist.txt",
+            "https://easylist.to/easylist/easyprivacy.txt",
+        ]
+        texts = []
+        try:
+            async with aiohttp.ClientSession() as session:
+                for url in urls:
+                    try:
+                        async with session.get(url, timeout=30) as resp:
+                            texts.append(await resp.text())
+                    except Exception as e:
+                        print(f"Adblock download warning: {url} failed: {e}")
+        except Exception as e:
+            print(f"Adblock download failed: {e}")
+            texts = []
 
-        async with aiohttp.ClientSession() as session:
-            async with session.get(easylist_url) as easylist_response:
-                easylist_text = await easylist_response.text()
-
-        raw_rules = easylist_text.splitlines()
-        self.rules = AdblockRules(raw_rules)
+        combined = "\n".join([t for t in texts if t])
+        lines = combined.splitlines() if combined else []
+        if not lines:
+            self.rules = None
+            return
+        try:
+            self.rules = AdblockRules(lines, supported_options=[
+                'domain','third-party','image','script','stylesheet','xmlhttprequest','subdocument','document','media','font','object','ping','other'
+            ])
+        except Exception as e:
+            print(f"Adblock rules build failed: {e}")
+            self.rules = None
 
 class Browser(QMainWindow):
     def __init__(self, cpu_pool=None):
@@ -3452,12 +3459,11 @@ class Browser(QMainWindow):
         self.url_bar = QLineEdit()
         self.url_bar.setPlaceholderText("Enter URL or Search Query")
 
-        # Kick off ad blocker initialization (async/offloaded)
+        # Prepare ad blocker (legacy worker approach)
         self.ad_blocker_rules = None
-        self._init_adblock_async()
         # Favicon cache and fetcher
-        self._favicon_cache: dict[str, QIcon] = {}
-        self._favicon_pending: dict[str, list] = {}
+        self._favicon_cache = {}
+        self._favicon_pending = {}
         self._favicon_default = QIcon()
         try:
             # Use a simple colored square as fallback to avoid theme icons
@@ -3499,6 +3505,9 @@ class Browser(QMainWindow):
         # Performance optimizations for profiles
         self._optimize_web_engine_profile(self.default_profile)
         self._optimize_web_engine_profile(self.private_profile)
+
+        # Start adblock initialization now that interceptors are attached
+        QTimer.singleShot(0, self._init_adblock_legacy)
 
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
@@ -5270,120 +5279,33 @@ class Browser(QMainWindow):
         
         super().closeEvent(event)
 
-    def _init_adblock_async(self):
-        """Initialize ad blocker lists asynchronously, using CPU pool if available.
-        Steps:
-          1. Download EasyList + EasyPrivacy asynchronously (aiohttp in dedicated event loop)
-          2. In process pool, prepare raw lines and extract a fast domain block set
-          3. Build AdblockRules in main thread with supported options
-        """
-        cache_path = os.path.join(self.data_dir, "adblock.txt")
-        cache_ttl_secs = 7 * 24 * 3600  # 7 days
-
-        async def _download():
-            urls = [
-                "https://easylist.to/easylist/easylist.txt",
-                "https://easylist.to/easylist/easyprivacy.txt",
-            ]
-            texts = []
-            try:
-                import aiohttp
-                async with aiohttp.ClientSession() as session:
-                    for url in urls:
-                        try:
-                            async with session.get(url, timeout=30) as resp:
-                                texts.append(await resp.text())
-                        except Exception as e:
-                            print(f"Adblock download warning: {url} failed: {e}")
-            except Exception as e:
-                print(f"Adblock download failed: {e}")
-                return None
-            return "\n".join([t for t in texts if t]) if texts else None
-
-        # moved to top-level: prepare_adblock_lines
-
-        async def orchestrate():
-            # Try cache first
-            txt = None
-            try:
-                if os.path.exists(cache_path):
-                    mtime = os.path.getmtime(cache_path)
-                    if (time.time() - mtime) < cache_ttl_secs:
-                        with open(cache_path, 'r', encoding='utf-8', errors='ignore') as f:
-                            txt = f.read()
-            except Exception:
-                txt = None
-            # If no fresh cache, download
-            if txt is None:
-                txt = await _download()
-                # Save to cache best-effort
-                if txt:
-                    try:
-                        with open(cache_path, 'w', encoding='utf-8') as f:
-                            f.write(txt)
-                    except Exception:
-                        pass
-            if txt is None:
+    def _init_adblock_legacy(self):
+        """Use the original AdBlockerWorker to build rules, then attach them."""
+        async def run():
+            worker = AdBlockerWorker()
+            await worker.download_adblock_lists()
+            rules = worker.rules
+            if not rules:
+                print("Adblock: no rules built")
                 return
-            # Offload parsing to pool if available
-            if self.cpu_pool and self.cpu_pool.workers > 1:
-                self.cpu_pool.submit(prepare_adblock_lines, txt, callback=self._receive_adblock_data)
-            else:
-                lines, domains = prepare_adblock_lines(txt)
-                self._receive_adblock_data((lines, domains))
+            self.ad_blocker_rules = rules
+            # Attach to both interceptors
+            if hasattr(self, 'network_interceptor'):
+                self.network_interceptor.ad_blocker_rules = rules
+            if hasattr(self, 'private_network_interceptor'):
+                self.private_network_interceptor.ad_blocker_rules = rules
+            print(f"Ad blocker ready: {len(getattr(rules, 'rules', []))} rules")
 
-        # Run orchestrate in temporary loop (non-blocking to UI)
         def _runner():
             try:
                 loop = asyncio.new_event_loop()
-                loop.run_until_complete(orchestrate())
+                loop.run_until_complete(run())
                 loop.close()
             except Exception as e:
-                print(f"Adblock init orchestration failed: {e}")
-        # Use a QThread-like lightweight approach via ProcessPool? Simpler: background thread
+                print(f"Adblock init failed: {e}")
+
         import threading
         threading.Thread(target=_runner, daemon=True).start()
-
-    def _receive_adblock_data(self, payload):
-        try:
-            lines_or_rules = None
-            domains = []
-            if isinstance(payload, tuple) and len(payload) == 2:
-                lines_or_rules, domains = payload
-            else:
-                # Ignore invalid payloads (e.g., worker error strings)
-                print(f"Adblock init: unexpected payload type {type(payload)}; skipping")
-                return
-            rules = None
-            # Build rules in main thread if we got list of strings
-            if isinstance(lines_or_rules, list) and (not lines_or_rules or isinstance(lines_or_rules[0], str)):
-                try:
-                    rules = AdblockRules(lines_or_rules, supported_options=[
-                        'domain','third-party','image','script','stylesheet','xmlhttprequest','subdocument','document','media','font','object','ping','other'
-                    ])
-                except Exception as e:
-                    print(f"Adblock rules build failed: {e}")
-                    rules = None
-            elif isinstance(lines_or_rules, AdblockRules):
-                rules = lines_or_rules
-            else:
-                print("Adblock init: payload did not contain rules or lines; skipping")
-                return
-            if rules:
-                self.ad_blocker_rules = rules
-                if hasattr(self, 'network_interceptor'):
-                    self.network_interceptor.ad_blocker_rules = rules
-                # Propagate to both default and private interceptors
-                if hasattr(self, 'private_network_interceptor'):
-                    self.private_network_interceptor.ad_blocker_rules = rules
-                if domains:
-                    if hasattr(self, 'network_interceptor'):
-                        self.network_interceptor.domain_block_set = set(domains)
-                    if hasattr(self, 'private_network_interceptor'):
-                        self.private_network_interceptor.domain_block_set = set(domains)
-                print(f"Ad blocker ready: {len(getattr(rules, 'rules', []))} rules, {len(domains)} fast domains")
-        except Exception as e:
-            print(f"Failed applying adblock data: {e}")
 
     def show_about_dialog(self):
         license_text = """
