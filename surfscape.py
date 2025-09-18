@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 
-import os, sys, json, asyncio, aiohttp, re, pyaudio, speech_recognition as sr, anthropic, markdown
+import os, sys, json, asyncio, aiohttp, re, pyaudio, speech_recognition as sr, anthropic, markdown, time
 import argparse, concurrent.futures, multiprocessing
 from PyQt6.QtCore import QUrl, Qt , QDateTime, QThread, pyqtSignal, QObject, QStandardPaths, QTimer, QSize
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog, QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QCheckBox, QSpinBox, QComboBox, QSlider, QGroupBox, QGridLayout, QScrollArea, QTextEdit, QFrame, QWidget, QSplitter
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
 from PyQt6.QtGui import QIcon, QPixmap, QAction, QKeySequence, QShortcut, QColor, QFont, QStandardItemModel, QStandardItem, QImage, QImageWriter
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtNetwork import QNetworkCookie, QNetworkProxy, QNetworkAccessManager, QNetworkRequest
+from PyQt6.QtNetwork import QNetworkCookie, QNetworkProxy, QNetworkAccessManager, QNetworkRequest, QLocalServer, QLocalSocket
 from PyQt6.QtWebEngineCore import QWebEngineUrlRequestInterceptor, QWebEngineProfile, QWebEngineSettings
 from adblockparser import AdblockRules
 
@@ -42,12 +42,6 @@ class CPUPool:
         # Only create a process pool if we have >1 workers (avoids fork cost on low spec)
         self._executor = None
         if self.workers > 1:
-            # "spawn" is safer with PyQt on some platforms; respect existing start method
-            if multiprocessing.get_start_method(allow_none=True) is None:
-                try:
-                    multiprocessing.set_start_method('spawn')
-                except RuntimeError:
-                    pass
             self._executor = concurrent.futures.ProcessPoolExecutor(max_workers=self.workers)
 
     def submit(self, fn, *args, callback=None):
@@ -80,6 +74,23 @@ class CPUPool:
             self._executor.shutdown(wait=False, cancel_futures=True)
 
 
+# --- Adblock preparation worker (must be top-level for ProcessPoolExecutor pickling) ---
+def prepare_adblock_lines(easy_text: str):
+    """Return (lines, domain_list) from combined filter text.
+    Extracts ||host^ patterns into domain_list for fast prefilter.
+    """
+    if not easy_text:
+        return [], []
+    lines = easy_text.splitlines()
+    domain_like = set()
+    host_re = re.compile(r"^\|\|([a-z0-9.-]+)\^")
+    for line in lines:
+        m = host_re.match(line)
+        if m:
+            domain_like.add(m.group(1).lower())
+    return lines, list(domain_like)
+
+
 class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
     def __init__(self, browser, ad_blocker_rules=None, is_private=False, parent=None):
         super().__init__(parent)
@@ -102,35 +113,25 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
         host = info.requestUrl().host()
         method = "GET"  # Default method, actual method detection requires more complex handling
         request_type = self._get_request_type(info.resourceType())
+        # Build adblock context from the request/tab
+        options, first_party_host = self._build_adblock_options(info)
+        # Cache key must include contextual info (domain/type/third-party) to avoid cross-tab mismatches
+        cache_key = (
+            url,
+            options.get('domain', ''),
+            request_type,
+            1 if options.get('third-party', False) else 0,
+        )
+
         
-        # Add to DevTools network monitor if available
-        if hasattr(self.browser, 'dev_tools') and self.browser.dev_tools:
-            self.browser.dev_tools.add_network_request(
-                url=url,
-                status="Loading",
-                request_type=request_type,
-                initiator="Browser",
-                size="--",
-                time="--"
-            )
-        
-        # Fast domain-level blocking (optional) before full rule evaluation
-        if getattr(self.browser, 'fast_adblock', False) and host and host in self.domain_block_set:
-            if hasattr(self.browser, 'dev_tools') and self.browser.dev_tools:
-                self.browser.dev_tools.add_network_request(
-                    url=url,
-                    status="Blocked (Domain)",
-                    request_type=request_type,
-                    initiator="AdBlocker",
-                    size="0 B",
-                    time="0 ms"
-                )
-            info.block(True)
-            return
+        # Fast domain-level prefilter (hint); do NOT block solely on this to respect exception rules.
+        prefilter_hit = False
+        if getattr(self.browser, 'fast_adblock', False) and host:
+            prefilter_hit = self._prefilter_hit(host)
 
         # Cached decision check
-        if url in self._decision_cache:
-            if self._decision_cache[url]:
+        if cache_key in self._decision_cache:
+            if self._decision_cache[cache_key]:
                 info.block(True)
             return
 
@@ -138,30 +139,111 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
         if self.ad_blocker_rules:
             blocked = False
             try:
-                blocked = self.ad_blocker_rules.should_block(url)
+                # If prefilter hinted block, we still ask the rules engine with context
+                blocked = self.ad_blocker_rules.should_block(url, options)
             except Exception:
                 blocked = False
             # Update cache
-            self._decision_cache[url] = blocked
-            self._decision_cache_order.append(url)
+            self._decision_cache[cache_key] = blocked
+            self._decision_cache_order.append(cache_key)
             if len(self._decision_cache_order) > self._cache_limit:
                 old = self._decision_cache_order.pop(0)
                 self._decision_cache.pop(old, None)
             if blocked:
-                if hasattr(self.browser, 'dev_tools') and self.browser.dev_tools:
-                    self.browser.dev_tools.add_network_request(
-                        url=url,
-                        status="Blocked (EasyList)",
-                        request_type=request_type,
-                        initiator="AdBlocker",
-                        size="0 B",
-                        time="0 ms"
-                    )
+                info.block(True)
+                return
+        else:
+            # No rules yet; if prefilter hinted block, apply conservative block for clear-cut ad hosts
+            if prefilter_hit:
                 info.block(True)
                 return
         
         # Continue with normal request processing
     
+    def _prefilter_hit(self, host: str) -> bool:
+        """Check if host or its registrable parent appears in the domain prefilter set.
+        This is a heuristic without PSL: checks exact host and last two labels.
+        """
+        try:
+            h = host.lower()
+            if h in self.domain_block_set:
+                return True
+            parts = h.split('.')
+            if len(parts) >= 2:
+                parent = parts[-2] + '.' + parts[-1]
+                if parent in self.domain_block_set:
+                    return True
+        except Exception:
+            pass
+        return False
+
+    def _build_adblock_options(self, info):
+        """Build options for AdblockRules.should_block reflecting the current tab/context.
+        Returns (options_dict, first_party_host).
+        """
+        # First-party (top-level document) host
+        try:
+            first_party_url = info.firstPartyUrl() if hasattr(info, 'firstPartyUrl') else None
+            first_party_host = first_party_url.host() if first_party_url else ''
+        except Exception:
+            first_party_host = ''
+
+        # Request host and type
+        try:
+            req_url = info.requestUrl()
+            req_host = req_url.host()
+        except Exception:
+            req_host = ''
+
+        # Determine third-party heuristic
+        third_party = False
+        if req_host and first_party_host:
+            third_party = not self._same_site(req_host, first_party_host)
+
+        # Resource type flags mapping
+        rtype = info.resourceType()
+        flags = {
+            'document': rtype == 0,
+            'subdocument': rtype == 1,
+            'stylesheet': rtype == 2,
+            'script': rtype == 3,
+            'image': rtype == 4,
+            'font': rtype == 5,
+            'object': rtype == 6,
+            'media': rtype == 7,
+            'worker': rtype in (8, 9),
+            'prefetch': rtype == 10,
+            'favicon': rtype == 11,
+            'xmlhttprequest': rtype == 12,
+            'ping': rtype == 13,
+            'serviceworker': rtype == 14,
+        }
+        # Build options supported by adblockparser
+        options = {k: v for k, v in flags.items() if v}
+        if first_party_host:
+            options['domain'] = first_party_host
+        if third_party:
+            options['third-party'] = True
+        return options, first_party_host
+
+    def _same_site(self, host_a: str, host_b: str) -> bool:
+        """Heuristic check whether two hosts are same-site (approximate eTLD+1).
+        Avoids external deps; good enough for most cases though not PSL-accurate.
+        """
+        if host_a == host_b:
+            return True
+        # Normalize
+        a = host_a.lower()
+        b = host_b.lower()
+        # Direct subdomain relationship
+        if a.endswith('.' + b) or b.endswith('.' + a):
+            return True
+        # Fallback: compare last two labels
+        def regdom(h: str):
+            parts = h.split('.')
+            return '.'.join(parts[-2:]) if len(parts) >= 2 else h
+        return regdom(a) == regdom(b)
+
     def _get_request_type(self, resource_type):
         """Convert QWebEngineUrlRequestInfo resource type to string"""
         type_map = {
@@ -5191,48 +5273,64 @@ class Browser(QMainWindow):
     def _init_adblock_async(self):
         """Initialize ad blocker lists asynchronously, using CPU pool if available.
         Steps:
-          1. Download EasyList asynchronously (aiohttp in dedicated event loop)
-          2. In process pool, build AdblockRules and extract a fast domain block set
+          1. Download EasyList + EasyPrivacy asynchronously (aiohttp in dedicated event loop)
+          2. In process pool, prepare raw lines and extract a fast domain block set
+          3. Build AdblockRules in main thread with supported options
         """
+        cache_path = os.path.join(self.data_dir, "adblock.txt")
+        cache_ttl_secs = 7 * 24 * 3600  # 7 days
+
         async def _download():
-            url = "https://easylist.to/easylist/easylist.txt"
+            urls = [
+                "https://easylist.to/easylist/easylist.txt",
+                "https://easylist.to/easylist/easyprivacy.txt",
+            ]
+            texts = []
             try:
                 import aiohttp
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(url, timeout=30) as resp:
-                        text = await resp.text()
-                        return text
+                    for url in urls:
+                        try:
+                            async with session.get(url, timeout=30) as resp:
+                                texts.append(await resp.text())
+                        except Exception as e:
+                            print(f"Adblock download warning: {url} failed: {e}")
             except Exception as e:
                 print(f"Adblock download failed: {e}")
                 return None
+            return "\n".join([t for t in texts if t]) if texts else None
 
-        def _prepare_rules(easylist_text: str):
-            if not easylist_text:
-                return None, []
-            lines = easylist_text.splitlines()
-            try:
-                rules = AdblockRules(lines)
-            except Exception as e:
-                return None, []
-            # Extract host-like tokens for prefilter
-            domain_like = set()
-            host_re = re.compile(r"^\|\|([a-z0-9.-]+)\^")
-            for line in lines:
-                m = host_re.match(line)
-                if m:
-                    domain_like.add(m.group(1))
-            return rules, list(domain_like)
+        # moved to top-level: prepare_adblock_lines
 
         async def orchestrate():
-            txt = await _download()
+            # Try cache first
+            txt = None
+            try:
+                if os.path.exists(cache_path):
+                    mtime = os.path.getmtime(cache_path)
+                    if (time.time() - mtime) < cache_ttl_secs:
+                        with open(cache_path, 'r', encoding='utf-8', errors='ignore') as f:
+                            txt = f.read()
+            except Exception:
+                txt = None
+            # If no fresh cache, download
+            if txt is None:
+                txt = await _download()
+                # Save to cache best-effort
+                if txt:
+                    try:
+                        with open(cache_path, 'w', encoding='utf-8') as f:
+                            f.write(txt)
+                    except Exception:
+                        pass
             if txt is None:
                 return
             # Offload parsing to pool if available
             if self.cpu_pool and self.cpu_pool.workers > 1:
-                self.cpu_pool.submit(_prepare_rules, txt, callback=self._receive_adblock_data)
+                self.cpu_pool.submit(prepare_adblock_lines, txt, callback=self._receive_adblock_data)
             else:
-                rules, domains = _prepare_rules(txt)
-                self._receive_adblock_data((rules, domains))
+                lines, domains = prepare_adblock_lines(txt)
+                self._receive_adblock_data((lines, domains))
 
         # Run orchestrate in temporary loop (non-blocking to UI)
         def _runner():
@@ -5248,16 +5346,41 @@ class Browser(QMainWindow):
 
     def _receive_adblock_data(self, payload):
         try:
-            if isinstance(payload, tuple):
-                rules, domains = payload
+            lines_or_rules = None
+            domains = []
+            if isinstance(payload, tuple) and len(payload) == 2:
+                lines_or_rules, domains = payload
             else:
-                rules, domains = payload, []
+                # Ignore invalid payloads (e.g., worker error strings)
+                print(f"Adblock init: unexpected payload type {type(payload)}; skipping")
+                return
+            rules = None
+            # Build rules in main thread if we got list of strings
+            if isinstance(lines_or_rules, list) and (not lines_or_rules or isinstance(lines_or_rules[0], str)):
+                try:
+                    rules = AdblockRules(lines_or_rules, supported_options=[
+                        'domain','third-party','image','script','stylesheet','xmlhttprequest','subdocument','document','media','font','object','ping','other'
+                    ])
+                except Exception as e:
+                    print(f"Adblock rules build failed: {e}")
+                    rules = None
+            elif isinstance(lines_or_rules, AdblockRules):
+                rules = lines_or_rules
+            else:
+                print("Adblock init: payload did not contain rules or lines; skipping")
+                return
             if rules:
                 self.ad_blocker_rules = rules
                 if hasattr(self, 'network_interceptor'):
                     self.network_interceptor.ad_blocker_rules = rules
-                if domains and hasattr(self, 'network_interceptor'):
-                    self.network_interceptor.domain_block_set = set(domains)
+                # Propagate to both default and private interceptors
+                if hasattr(self, 'private_network_interceptor'):
+                    self.private_network_interceptor.ad_blocker_rules = rules
+                if domains:
+                    if hasattr(self, 'network_interceptor'):
+                        self.network_interceptor.domain_block_set = set(domains)
+                    if hasattr(self, 'private_network_interceptor'):
+                        self.private_network_interceptor.domain_block_set = set(domains)
                 print(f"Ad blocker ready: {len(getattr(rules, 'rules', []))} rules, {len(domains)} fast domains")
         except Exception as e:
             print(f"Failed applying adblock data: {e}")
@@ -5288,13 +5411,46 @@ class Browser(QMainWindow):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Surfscape Browser")
     parser.add_argument("--workers", type=int, default=os.cpu_count() or 1,
-                        help="Number of worker processes for CPU-bound tasks (markdown rendering, future features). Set 1 to disable multiprocessing.")
+                        help="Number of worker processes for CPU-bound tasks (markdown rendering, adblock parsing). Set 1 to disable multiprocessing.")
     args, unknown = parser.parse_known_args()
-    # Preserve compatibility with PyQt argument parsing by trimming sys.argv
+
+    # Force 'spawn' to avoid Qt duplication caused by 'fork' (especially in packaged builds)
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        # Already set in some environments; safe to continue
+        pass
+    # Ensure multiprocessing works under frozen executables (Windows/macOS packaging)
+    try:
+        multiprocessing.freeze_support()
+    except Exception:
+        pass
+
+    # Create pool BEFORE QApplication so child processes do not inherit a living Qt state
+    cpu_pool = CPUPool(args.workers)
+
+    # Trim custom args for Qt
     qt_argv = [sys.argv[0]] + [a for a in unknown]
     app = QApplication(qt_argv)
 
-    cpu_pool = CPUPool(args.workers)
+    # Single-instance guard (prevents multi-window carousel). Set SURFSCAPE_ALLOW_MULTI=1 to allow multiple instances.
+    single_instance_server = None
+    if os.environ.get("SURFSCAPE_ALLOW_MULTI") not in ("1", "true", "True"):
+        instance_key = "surfscape_single_instance"
+        sock = QLocalSocket()
+        sock.connectToServer(instance_key)
+        if sock.waitForConnected(100):
+            sock.close()
+            sys.exit(0)
+        single_instance_server = QLocalServer()
+        if not single_instance_server.listen(instance_key):
+            try:
+                QLocalServer.removeServer(instance_key)
+            except Exception:
+                pass
+            single_instance_server.listen(instance_key)
+        # Keep reference so it isn't GC'd
+        app._single_instance_server = single_instance_server
     window = Browser(cpu_pool=cpu_pool)
     window.show()
     exit_code = app.exec()
