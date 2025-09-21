@@ -4,11 +4,13 @@ Priority: optional
 Maintainer: André Machado <machaddr@falanet.org>
 Build-Depends: debhelper-compat (= 12),
                dh-python,
+               portaudio19-dev,
                python3-all,
                python3-setuptools,
                python3-pip,
                python3-venv,
                python3-pyqt6,
+               python3-pyqt6.qtwebengine,
                python3-pyaudio,
                python3-markdown,
                python3-dev
