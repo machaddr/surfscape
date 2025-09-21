@@ -17,7 +17,7 @@ Homepage: https://github.com/machaddr/surfscape
 X-Python3-Version: >= 3.8
 
 Package: surfscape
-Architecture: amd64
+Architecture: any
 Depends: ${misc:Depends}
 Description: Your Own Way to Navigate the Web with Freedom (static build)
  Surfscape is a modern web browser built with PyQt6 that provides:
