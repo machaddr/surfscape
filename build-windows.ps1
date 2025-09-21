@@ -102,24 +102,7 @@ if (-not (Test-Path $venvPython)) { throw "Unable to locate venv python interpre
 
 Write-Step "Upgrading pip and installing requirements"
 & $venvPython -m pip install --upgrade pip wheel setuptools
-## Temporarily inject PyQt6 requirements if not present so Windows build bundles Qt
-$reqPath = Resolve-Path "requirements.txt"
-$origReqContent = Get-Content -Raw -Path $reqPath
-$needsPyQt = ($origReqContent -notmatch '(?im)^PyQt6(\s|=|>|<)')
-if ($needsPyQt) {
-    Write-Step "Temporarily adding PyQt6>=6.4.0 and PyQt6-WebEngine>=6.4.0 to requirements.txt"
-    $tempContent = $origReqContent.TrimEnd() + "`nPyQt6>=6.4.0`nPyQt6-WebEngine>=6.4.0`n"
-    Set-Content -Path $reqPath -Value $tempContent -Encoding UTF8
-}
-
-try {
-    & $venvPython -m pip install -r requirements.txt
-} finally {
-    if ($needsPyQt) {
-        Write-Step "Restoring original requirements.txt (removing temporary PyQt6 entries)"
-        Set-Content -Path $reqPath -Value $origReqContent -Encoding UTF8
-    }
-}
+& $venvPython -m pip install -r requirements.txt
 
 # Verify PyInstaller available
 Write-Step "Verifying PyInstaller availability"
