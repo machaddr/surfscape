@@ -11,6 +11,8 @@ Surfscape is a lightweight and customizable web browser built using PyQt6. It pr
 - **History:** Keep track of your browsing history.
 - **Cookies Management:** Manage cookies for better privacy and control.
 - **AdBlocker:** Block unwanted ads for a cleaner browsing experience.
+    - Incremental, per-domain rule subsets compiled asynchronously using a multiprocessing pool for faster first paint.
+- **Multiprocessing Offload:** Heavy tasks (Markdown rendering, adblock subset compilation) are processed in background worker processes (configurable with --workers flag).
 - **Customizable Settings:** Change the homepage, theme, font, and more.
 - **Keyboard Shortcuts:** Use convenient keyboard shortcuts for common actions.
 
@@ -220,6 +222,27 @@ make run
 # Or manually
 python3 surfscape.py
 ```
+
+### Multiprocessing & Adblock Performance
+
+Surfscape now supports a configurable process pool used to accelerate CPU-bound tasks like large Markdown rendering and per-domain adblock rule subset compilation.
+
+Usage examples:
+```bash
+# Auto-detect CPU count (default when not in safe mode)
+python3 surfscape.py
+
+# Explicitly set number of worker processes
+python3 surfscape.py --workers 4
+
+# Disable multiprocessing (forces in-process execution)
+python3 surfscape.py --workers 1
+```
+
+Notes:
+- On platforms detected as "safe mode" (typically ARM devices/Raspberry Pi) the pool is forced to a single process to avoid GPU/QtWebEngine issues.
+- Adblock lists are downloaded once in a background thread; domain-specific rule subsets are compiled lazily and prefetched as soon as a tab begins loading.
+- The first requests on a fresh domain may proceed without blocking until the compiled subset is ready; subsequent requests leverage cached decisions.
 
 ## Build Troubleshooting
 

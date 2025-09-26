@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+from __future__ import annotations
+
 import os, sys, json, asyncio, aiohttp, re, pyaudio, speech_recognition as sr, anthropic, markdown, time, platform
 import argparse, concurrent.futures, multiprocessing, threading
 from PyQt6.QtCore import QUrl, Qt , QDateTime, QThread, pyqtSignal, QObject, QStandardPaths, QTimer, QSize, QCoreApplication
@@ -61,6 +63,7 @@ def _configure_runtime_safety() -> bool:
     return safe_mode
 
 # Compute safe-mode as early as possible
+APP_START_TS = time.time()
 SAFE_MODE = _configure_runtime_safety()
 
 # --- Multi-core / CPU pool utilities ---------------------------------------------------------
@@ -86,48 +89,62 @@ def _markdown_convert_task(text: str, enable_markdown: bool):
 class CPUPool:
     """Lightweight wrapper around ProcessPoolExecutor to offload CPU-bound work.
 
-    We keep this intentionally small to avoid complex cross-process state. Tasks must be
-    pure functions returning serializable results.
+    Notes:
+      * Delays creating worker processes until first asynchronous submission.
+      * Falls back to in-process execution when workers == 1 or pool creation fails.
+      * Provides a fire-and-forget style callback marshalled onto the GUI thread when possible.
     """
     def __init__(self, workers: int | None):
-        # On SAFE_MODE platforms, force single-process to avoid GL/semaphore issues
         if SAFE_MODE:
+            # Avoid multiprocessing on platforms/drivers known to behave poorly with fork/spawn + QtWebEngine
             self.workers = 1
         else:
             self.workers = max(1, int(workers or 1))
-        # Lazily create a process pool on first submit to avoid early process/semaphore creation
-        # that can conflict with QtWebEngine on some platforms.
-        self._executor = None
+        self._executor: concurrent.futures.ProcessPoolExecutor | None = None
+
+    def _ensure_pool(self):
+        if self._executor is None and self.workers > 1:
+            try:
+                self._executor = concurrent.futures.ProcessPoolExecutor(max_workers=self.workers)
+            except Exception as e:
+                print(f"CPUPool: failed to start process pool ({e}); using in-process execution")
+                self._executor = None
 
     def submit(self, fn, *args, callback=None):
-        """Submit a CPU task. If no pool, executes synchronously in main process."""
-        if self._executor is None:
-            result = fn(*args)
+        """Submit a CPU-bound function.
+        If workers == 1 (or pool creation fails) executes synchronously.
+        Returns a Future when asynchronous, otherwise None.
+        """
+        if self.workers == 1:
+            # Synchronous fast path
+            try:
+                result = fn(*args)
+            except Exception as e:
+                result = f"<pre>Worker error: {e}</pre>"
             if callback:
-                # Defer callback to GUI loop if available
                 try:
                     from PyQt6.QtCore import QTimer
                     QTimer.singleShot(0, lambda r=result: callback(r))
                 except Exception:
                     callback(result)
-            return
+            return None
 
-        # Create the pool upon first use if needed
-        if self._executor is None and self.workers > 1:
+        self._ensure_pool()
+        if self._executor is None:
+            # Fallback: run inline
             try:
-                self._executor = concurrent.futures.ProcessPoolExecutor(max_workers=self.workers)
-            except Exception:
-                # Fall back to in-process execution if pool creation fails
-                res = fn(*args)
-                if callback:
-                    try:
-                        from PyQt6.QtCore import QTimer
-                        QTimer.singleShot(0, lambda r=res: callback(r))
-                    except Exception:
-                        callback(res)
-                return
+                result = fn(*args)
+            except Exception as e:
+                result = f"<pre>Worker error: {e}</pre>"
+            if callback:
+                try:
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(0, lambda r=result: callback(r))
+                except Exception:
+                    callback(result)
+            return None
 
-        fut = self._executor.submit(fn, *args) if self._executor else None
+        fut = self._executor.submit(fn, *args)
         if callback:
             from PyQt6.QtCore import QTimer
             def _done(f):
@@ -136,16 +153,15 @@ class CPUPool:
                 except Exception as e:
                     res = f"<pre>Worker error: {e}</pre>"
                 QTimer.singleShot(0, lambda r=res: callback(r))
-            if fut is not None:
-                fut.add_done_callback(_done)
-            else:
-                # If no future (pool creation failed), we already invoked callback above.
-                pass
+            fut.add_done_callback(_done)
         return fut
 
     def shutdown(self):
-        if self._executor:
-            self._executor.shutdown(wait=False, cancel_futures=True)
+        try:
+            if self._executor:
+                self._executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
 
 
 
@@ -160,9 +176,17 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
         # Fast domain-level block set populated asynchronously (optional)
         self.domain_block_set = set()
         # Simple LRU cache for rule decisions to reduce repeated expensive checks
+        from collections import deque
         self._decision_cache = {}
-        self._decision_cache_order = []
-        self._cache_limit = 5000
+        self._decision_cache_order = deque()
+        self._cache_limit = 4000  # slightly smaller to reduce memory churn
+        # Per first-party domain statistics to derive "safe" heuristic
+        self._fp_stats = {}  # first_party_host -> {'total':int,'blocked':int}
+        self._safe_first_party = set()  # domains considered low-risk (skip some rule checks)
+        # Cache of third-party hosts already confirmed clean for images/media to skip repeat checks
+        self._clean_tp_hosts = set()
+        # Resource types we may skip for safe domains (cheap, numerous)
+        self._skip_types_safe = {"Image", "Font", "Media", "Favicon"}
     
     def interceptRequest(self, info):
         # Capture network request details for DevTools
@@ -182,7 +206,16 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
             1 if options.get('third-party', False) else 0,
         )
 
-        
+        # Heuristic: if the first-party domain was classified safe AND this is a skippable resource type
+        # then skip full rule evaluation for non-script/style resources (still allow prefilter to block hard cases)
+        fp = options.get('domain', '')
+        third_party = options.get('third-party', False)
+        if fp in self._safe_first_party and request_type in self._skip_types_safe:
+            # Quick prefilter hard block if obvious ad host
+            if getattr(self.browser, 'fast_adblock', False) and host and self._prefilter_hit(host):
+                info.block(True)
+            return
+
         # Fast domain-level prefilter (hint); do NOT block solely on this to respect exception rules.
         prefilter_hit = False
         if getattr(self.browser, 'fast_adblock', False) and host:
@@ -194,7 +227,15 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
                 info.block(True)
             return
 
+        # If third-party host already observed clean for passive resource types, skip expensive engine lookup
+        if third_party and host in self._clean_tp_hosts and request_type in self._skip_types_safe:
+            if prefilter_hit:
+                info.block(True)
+            return
+
         # Full rule evaluation (supports either a direct AdblockRules engine or an incremental provider)
+        blocked = False
+        used_engine = False
         if self.ad_blocker_rules:
             blocked = False
             engine = None
@@ -206,6 +247,7 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
                 else:
                     engine = self.ad_blocker_rules
                 if engine:
+                    used_engine = True
                     blocked = engine.should_block(url, options)
             except Exception:
                 blocked = False
@@ -213,17 +255,44 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
             self._decision_cache[cache_key] = blocked
             self._decision_cache_order.append(cache_key)
             if len(self._decision_cache_order) > self._cache_limit:
-                old = self._decision_cache_order.pop(0)
-                self._decision_cache.pop(old, None)
+                try:
+                    old = self._decision_cache_order.popleft()
+                    self._decision_cache.pop(old, None)
+                except Exception:
+                    pass
             if blocked:
                 info.block(True)
+                # Update per-domain stats
+                if fp:
+                    st = self._fp_stats.setdefault(fp, {'total':0,'blocked':0})
+                    st['total'] += 1
+                    st['blocked'] += 1
                 return
         else:
             # No rules yet; if prefilter hinted block, apply conservative block for clear-cut ad hosts
             if prefilter_hit:
                 info.block(True)
+                if fp:
+                    st = self._fp_stats.setdefault(fp, {'total':0,'blocked':0})
+                    st['total'] += 1
+                    st['blocked'] += 1
                 return
-        
+        # Stats & heuristics updates for safe domain classification
+        if fp:
+            st = self._fp_stats.setdefault(fp, {'total':0,'blocked':0})
+            st['total'] += 1
+            if blocked:
+                st['blocked'] += 1
+            # Mark domain safe if many allowed and none blocked (thresholds chosen conservatively)
+            if (st['total'] >= 25 and st['blocked'] == 0) or (st['total'] >= 60 and st['blocked'] <= 1):
+                self._safe_first_party.add(fp)
+        # Record clean third-party host for media-heavy resources if engine used and not blocked
+        if third_party and not blocked and used_engine and request_type in self._skip_types_safe:
+            self._clean_tp_hosts.add(host)
+            if len(self._clean_tp_hosts) > 8000:
+                # Trim arbitrarily by clearing (simple, low overhead)
+                self._clean_tp_hosts.clear()
+
         # Continue with normal request processing
     
     def _prefilter_hit(self, host: str) -> bool:
@@ -3445,7 +3514,7 @@ class ClaudeAIWidget(QWidget):
             self.output_window.append(f"<pre>Background render failed: {e}</pre>")
 
 class AdBlockerWorker:
-    def __init__(self, rules=None):
+    def __init__(self, rules=None, cpu_pool: 'CPUPool' | None = None, cache_path: str | None = None, cache_max_age: int = 86400):
         self.rules = rules  # Monolithic engine (legacy)
         # Incremental mode attributes
         self._all_rule_lines: list[str] | None = None
@@ -3455,6 +3524,11 @@ class AdBlockerWorker:
         self._compiled_cache_limit = 64  # distinct first-party domains
         self._lock = threading.RLock()
         self.incremental_enabled = True  # can be toggled off if building index fails
+        self._building: set[str] = set()  # domains currently being built asynchronously
+        self.cpu_pool = cpu_pool
+        self.cache_path = cache_path
+        self.cache_max_age = cache_max_age
+        self.generic_engine: AdblockRules | None = None  # quick generic engine for early blocking
 
     async def download_adblock_lists(self):
         """Download EasyList + EasyPrivacy. Build either monolithic or incremental structures.
@@ -3470,30 +3544,70 @@ class AdBlockerWorker:
                - A minimum fallback set (generic rules limited to 300 lines) to still catch generic ads
           5. Cache compiled subsets (LRU) to keep memory/time balanced.
         """
-        urls = [
-            "https://easylist.to/easylist/easylist.txt",
-            "https://easylist.to/easylist/easyprivacy.txt",
-        ]
-        texts = []
-        try:
-            async with aiohttp.ClientSession() as session:
-                for url in urls:
-                    try:
-                        async with session.get(url, timeout=30) as resp:
-                            texts.append(await resp.text())
-                    except Exception as e:
-                        print(f"Adblock download warning: {url} failed: {e}")
-        except Exception as e:
-            print(f"Adblock download failed: {e}")
+        lines: list[str] = []
+        # 1. Try cache
+        if self.cache_path and os.path.exists(self.cache_path):
+            try:
+                mtime = os.path.getmtime(self.cache_path)
+                if (time.time() - mtime) < self.cache_max_age:
+                    with open(self.cache_path, 'r', encoding='utf-8', errors='ignore') as f:
+                        lines = f.read().splitlines()
+                    # print only minimal log to avoid slowing startup
+                    print(f"Adblock: loaded cached lists ({len(lines)} lines)")
+            except Exception as e:
+                print(f"Adblock cache read failed: {e}")
+        # 2. If no fresh cache, download in background (still inside this async)
+        if not lines:
+            urls = [
+                "https://easylist.to/easylist/easylist.txt",
+                "https://easylist.to/easylist/easyprivacy.txt",
+            ]
             texts = []
-
-        combined = "\n".join([t for t in texts if t])
-        lines = combined.splitlines() if combined else []
+            try:
+                async with aiohttp.ClientSession() as session:
+                    for url in urls:
+                        try:
+                            async with session.get(url, timeout=30) as resp:
+                                texts.append(await resp.text())
+                        except Exception as e:
+                            print(f"Adblock download warning: {url} failed: {e}")
+            except Exception as e:
+                print(f"Adblock download failed: {e}")
+                texts = []
+            combined = "\n".join([t for t in texts if t])
+            lines = combined.splitlines() if combined else []
+            # Persist cache (best effort)
+            if lines and self.cache_path:
+                try:
+                    with open(self.cache_path, 'w', encoding='utf-8') as f:
+                        f.write('\n'.join(lines))
+                except Exception as e:
+                    print(f"Adblock cache write failed: {e}")
         if not lines:
             self.rules = None
             return
         # Keep raw lines for incremental mode
         self._all_rule_lines = lines
+        # Build quick generic engine FIRST so early requests can be filtered while index builds
+        try:
+            generic_rules = []
+            for line in lines:
+                if len(generic_rules) >= 400:  # cap for quick compile
+                    break
+                if not line or line.startswith('!'):
+                    continue
+                if '##' in line or '#@#' in line:
+                    continue
+                if '||' not in line:
+                    # Broad blocking patterns
+                    generic_rules.append(line)
+            if generic_rules:
+                self.generic_engine = AdblockRules(generic_rules, supported_options=[
+                    'domain','third-party','image','script','stylesheet','xmlhttprequest','subdocument','document','media','font','object','ping','other'
+                ])
+        except Exception as e:
+            print(f"Adblock generic engine build failed: {e}")
+            self.generic_engine = None
         # Attempt to build lightweight domain index
         try:
             domain_pattern = re.compile(r"\|\|([a-z0-9.-]+)\^(?:[$\w]|$)")
@@ -3537,9 +3651,124 @@ class AdBlockerWorker:
         except Exception:
             pass
 
+    def _select_subset_lines(self, host: str):
+        """Pure function logic to select candidate rule lines for a host.
+        Executed either in-process or inside a worker process (must not close over Qt objects)."""
+        if not host:
+            return []
+        host_norm = host.lower()
+        if host_norm.startswith('www.'):
+            host_norm = host_norm[4:]
+        lines = self._all_rule_lines or []
+        domain_index = self._domain_index
+        line_indexes = set()
+        parts = host_norm.split('.') if host_norm else []
+        for i in range(max(0, len(parts)-2), len(parts)):
+            token = '.'.join(parts[i:])
+            if token in domain_index:
+                for idx in domain_index[token]:
+                    line_indexes.add(idx)
+        # Exceptions
+        if lines and host_norm:
+            exc_pattern = re.compile(r"@@.*" + re.escape(host_norm))
+            for idx, line in enumerate(lines):
+                if '@@' in line and exc_pattern.search(line):
+                    line_indexes.add(idx)
+        # Generic subset
+        generic_subset = []
+        for line in lines:
+            if len(generic_subset) >= 250:
+                break
+            if not line or line.startswith('!'):
+                continue
+            if '##' in line or '#@#' in line:
+                continue
+            if '||' not in line:
+                generic_subset.append(line)
+        if not line_indexes and not generic_subset:
+            return []
+        return [lines[i] for i in sorted(line_indexes)] + generic_subset
+
+    @staticmethod
+    def _subset_builder_task(host: str, lines: list[str], domain_index: dict[str, list[int]]):
+        # Re-implement small selection logic in worker process (no regex exceptions scan for perf)
+        host_norm = host.lower()
+        if host_norm.startswith('www.'):
+            host_norm = host_norm[4:]
+        line_indexes = set()
+        parts = host_norm.split('.') if host_norm else []
+        for i in range(max(0, len(parts)-2), len(parts)):
+            token = '.'.join(parts[i:])
+            bucket = domain_index.get(token)
+            if bucket:
+                for idx in bucket:
+                    line_indexes.add(idx)
+        # Quick exception scan (cheap contains + startswith)
+        generic_subset = []
+        exc_prefix = '@@'
+        for idx, line in enumerate(lines):
+            if not line or line.startswith('!'):
+                continue
+            if line.startswith(exc_prefix) and host_norm in line:
+                line_indexes.add(idx)
+            if '##' in line or '#@#' in line:
+                continue
+            if len(generic_subset) < 250 and '||' not in line:
+                generic_subset.append(line)
+            if len(generic_subset) >= 250 and idx > 5000:  # early stop heuristic
+                break
+        if not line_indexes and not generic_subset:
+            return host, []
+        selected = [lines[i] for i in sorted(line_indexes)] + generic_subset
+        return host, selected
+
+    def prefetch_domain(self, host: str):
+        """Asynchronously build and cache rules for a domain using the CPU pool.
+        Safe to call multiple times; only the first will enqueue work.
+        """
+        if not self.incremental_enabled or not self.cpu_pool or not host:
+            return
+        norm = host.lower()
+        if norm.startswith('www.'):
+            norm = norm[4:]
+        with self._lock:
+            if norm in self._compiled_cache or norm in self._building:
+                return
+            self._building.add(norm)
+            lines = self._all_rule_lines or []
+            domain_index = self._domain_index
+        # Submit task (arguments must be picklable)
+        self.cpu_pool.submit(self._subset_builder_task, norm, lines, domain_index, callback=self._on_subset_ready)
+
+    def _on_subset_ready(self, result):
+        try:
+            host, selected = result if isinstance(result, tuple) else (None, [])
+            if not host or not selected:
+                with self._lock:
+                    if host in self._building:
+                        self._building.remove(host)
+                return
+            try:
+                engine = AdblockRules(selected, supported_options=[
+                    'domain','third-party','image','script','stylesheet','xmlhttprequest','subdocument','document','media','font','object','ping','other'
+                ])
+            except Exception as e:
+                print(f"Adblock async subset build failed for {host}: {e}")
+                with self._lock:
+                    if host in self._building:
+                        self._building.remove(host)
+                return
+            with self._lock:
+                self._compiled_cache[host] = engine
+                self._lru_touch(host)
+                if host in self._building:
+                    self._building.remove(host)
+        except Exception as e:
+            print(f"Adblock subset callback error: {e}")
+
     def get_rules_for(self, first_party_domain: str):
         """Return (and possibly build) an AdblockRules engine focused on first_party_domain.
-
+        Uses asynchronous prefetch if a CPU pool is available.
         Falls back to monolithic engine if incremental mode disabled.
         """
         if not first_party_domain:
@@ -3547,77 +3776,62 @@ class AdBlockerWorker:
         host = first_party_domain.lower()
         if host.startswith('www.'):
             host = host[4:]
-        # If monolithic engine exists or incremental disabled
         if not self.incremental_enabled:
             return self.rules
         with self._lock:
-            if host in self._compiled_cache:
-                self._lru_touch(host)
-                return self._compiled_cache[host]
-            # Collect candidate rule lines
-            line_indexes = set()
-            parts = host.split('.') if host else []
-            # Include progressively shorter eTLD+1 style tokens
-            for i in range(max(0, len(parts)-2), len(parts)):
-                token = '.'.join(parts[i:])
-                if token in self._domain_index:
-                    for idx in self._domain_index[token]:
-                        line_indexes.add(idx)
-            # Always include exception rules referencing host
-            if self._all_rule_lines:
-                exc_pattern = re.compile(r"@@.*" + re.escape(host))
-                for idx, line in enumerate(self._all_rule_lines):
-                    if '@@' in line and host and exc_pattern.search(line):
-                        line_indexes.add(idx)
-            # Provide a small generic subset (first 250 non-comment generic cosmetic/network rules) to catch general ads
-            generic_subset = []
-            if self._all_rule_lines:
-                for line in self._all_rule_lines:
-                    if len(generic_subset) >= 250:
-                        break
-                    if not line or line.startswith('!'):
-                        continue
-                    if '##' in line or '#@#' in line:
-                        continue  # Skip cosmetic for performance (adblockparser ignores cosmetic anyway)
-                    if '||' not in line:
-                        generic_subset.append(line)
-            # Build final line list
-            if not line_indexes and not generic_subset:
-                return None
-            selected = [self._all_rule_lines[i] for i in sorted(line_indexes)] + generic_subset
-            try:
-                engine = AdblockRules(selected, supported_options=[
-                    'domain','third-party','image','script','stylesheet','xmlhttprequest','subdocument','document','media','font','object','ping','other'
-                ])
-                self._compiled_cache[host] = engine
-                self._lru_touch(host)
-                return engine
-            except Exception as e:
-                print(f"Adblock subset build failed for {host}: {e}")
-                return None
+            engine = self._compiled_cache.get(host)
+        if engine:
+            self._lru_touch(host)
+            return engine
+        # Trigger async prefetch (non-blocking). First requests may miss until ready.
+        self.prefetch_domain(host)
+        # As a fallback for first-time critical navigation, perform a lightweight synchronous subset selection
+        # limited to very small slice if no build already started (heuristic: first 40 generic rules only).
+        with self._lock:
+            building = host in self._building
+        if building:
+            return None
+        subset = self._select_subset_lines(host)
+        if not subset:
+            return self.generic_engine
+        try:
+            engine = AdblockRules(subset[:300], supported_options=[
+                'domain','third-party','image','script','stylesheet','xmlhttprequest','subdocument','document','media','font','object','ping','other'
+            ])
+            with self._lock:
+                # Do not overwrite async full build when it arrives; treat this as provisional.
+                if host not in self._compiled_cache:
+                    self._compiled_cache[host] = engine
+                    self._lru_touch(host)
+            return engine
+        except Exception:
+            return self.generic_engine
+
+        # Fallback to generic engine if nothing else
+        return self.generic_engine
 
 class Browser(QMainWindow):
-    def __init__(self, cpu_pool=None):
+    def __init__(self, cpu_pool=None, fast_start: bool | None = None):
         super().__init__()
         self.setWindowTitle("surfscape")
         self.setMinimumSize(800, 640)
         self.cpu_pool = cpu_pool  # Multi-core pool for offloading CPU tasks
         self.fast_adblock = True  # Enable fast domain prefilter
-        
+
         # Set application icon if available
         try:
             icon_path = os.path.join(os.path.dirname(__file__), 'icon', 'icon.png')
             if os.path.exists(icon_path):
                 self.setWindowIcon(QIcon(icon_path))
             else:
-                transparent_pixmap = QPixmap(1, 1)
-                transparent_pixmap.fill()
-                self.setWindowIcon(QIcon(transparent_pixmap))
+                pm = QPixmap(1, 1)
+                pm.fill()
+                self.setWindowIcon(QIcon(pm))
         except Exception:
-            transparent_pixmap = QPixmap(1, 1)
-            transparent_pixmap.fill()
-            self.setWindowIcon(QIcon(transparent_pixmap))
-        
+            pm = QPixmap(1, 1)
+            pm.fill()
+            self.setWindowIcon(QIcon(pm))
+
         self.showMaximized()
 
         # Paths for the data files
@@ -3627,132 +3841,158 @@ class Browser(QMainWindow):
         self.history_file = os.path.join(self.data_dir, "history.json")
         self.cookies_file = os.path.join(self.data_dir, "cookies.json")
         self.session_file = os.path.join(self.data_dir, "session.json")
-        
-        # Initialize new settings manager
+
+        # Initialize settings manager
         self.settings_manager = SettingsManager(self.data_dir)
-        
-        # Legacy compatibility - keep old variables for existing code
+
+        # Theme/font legacy variables
         bg_color = self.settings_manager.get('background_color', 'system')
         font_color = self.settings_manager.get('font_color', '#000000')
-        
-        if bg_color != 'system':
-            self.background_color = QColor(bg_color)
-        else:
-            self.background_color = QColor()  # Invalid color for system theme
-        
-        if font_color != 'system':
-            self.font_color = QColor(font_color)
-        else:
-            self.font_color = QColor()  # Invalid color for system theme
+        self.background_color = QColor(bg_color) if bg_color != 'system' else QColor()
+        self.font_color = QColor(font_color) if font_color != 'system' else QColor()
         self.font = QFont()
         self.homepage_url = self.settings_manager.get('homepage', 'https://html.duckduckgo.com/html')
 
-        self.bookmarks = self.load_json(self.bookmarks_file)
-        self.history = self.load_json(self.history_file)
-        self.cookies = self.load_json(self.cookies_file)
-        
-        # Load old settings format for compatibility
+        # Deferred JSON loads (faster perceived startup)
+        self.bookmarks = []
+        self.history = []
+        self.cookies = []
+        QTimer.singleShot(50, lambda: self._deferred_load_json('bookmarks'))
+        QTimer.singleShot(80, lambda: self._deferred_load_json('history'))
+        QTimer.singleShot(110, lambda: self._deferred_load_json('cookies'))
+
+        # Legacy flat settings
         self.settings = self.load_json(os.path.join(self.data_dir, 'settings.json'))
-        
+
+        # URL bar
         self.url_bar = QLineEdit()
         self.url_bar.setPlaceholderText("Enter URL or Search Query")
 
-        # Prepare ad blocker (legacy worker approach)
+        # Ad blocker placeholder
         self.ad_blocker_rules = None
-        # Favicon cache and fetcher
+
+        # Favicon handling
         self._favicon_cache = {}
         self._favicon_pending = {}
         self._favicon_default = QIcon()
         try:
-            # Use a simple colored square as fallback to avoid theme icons
-            pm = QPixmap(16, 16)
-            pm.fill(QColor(200, 200, 200))
-            self._favicon_default = QIcon(pm)
+            default_pm = QPixmap(16, 16)
+            default_pm.fill(QColor(200, 200, 200))
+            self._favicon_default = QIcon(default_pm)
         except Exception:
             pass
         self._favicon_manager = QNetworkAccessManager(self)
-        # Local on-disk cache folder
         self.favicon_dir = os.path.join(self.data_dir, 'favicons')
         os.makedirs(self.favicon_dir, exist_ok=True)
 
-        # Set up download manager
-        self.download_manager = DownloadManager(self)
-        QWebEngineProfile.defaultProfile().downloadRequested.connect(self.handle_download_request)
-        
-        # Set up find dialog
-        self.find_dialog = FindDialog(self, self)
-        
-        # Set up developer tools
-        self.dev_tools = DevToolsDialog(self, self)
-        
-        # Set up network request interceptor for DevTools and ad blocking (normal browsing)
+        # Lazy heavy components
+        self.download_manager = None
+        self.find_dialog = None
+        self.dev_tools = None
+
+        # Profiles & interceptors
         self.network_interceptor = NetworkRequestInterceptor(self, self.ad_blocker_rules, is_private=False)
-        
-        # Set up private browsing profile
         self.private_profile = QWebEngineProfile()
-        
-        # Set up private browsing profile with ad blocker and network monitoring
-        # Create a separate interceptor for private browsing
         self.private_network_interceptor = NetworkRequestInterceptor(self, self.ad_blocker_rules, is_private=True)
         self.private_profile.setUrlRequestInterceptor(self.private_network_interceptor)
-        
-        # Set up default profile with network monitoring and ad blocking
         self.default_profile = QWebEngineProfile.defaultProfile()
         self.default_profile.setUrlRequestInterceptor(self.network_interceptor)
-        
-        # Performance optimizations for profiles
         self._optimize_web_engine_profile(self.default_profile)
         self._optimize_web_engine_profile(self.private_profile)
 
-        # Start adblock initialization now that interceptors are attached
-        QTimer.singleShot(0, self._init_adblock_legacy)
+        # Fast start flag (now ON by default unless explicitly disabled)
+        # Resolution order: explicit ctor arg > env var > default True
+        if fast_start is not None:
+            self.fast_start = bool(fast_start)
+        else:
+            env_val = os.environ.get("SURFSCAPE_FAST_START")
+            if env_val is None:
+                # No override provided: default enable
+                self.fast_start = True
+            else:
+                env_val_l = env_val.lower()
+                # Treat common false-y indicators as disable; everything else enables
+                self.fast_start = env_val_l not in ("0", "false", "no", "off", "disable", "disabled")
+        # Optional detailed page performance tracing (disabled by default)
+        self.perf_trace = os.environ.get("SURFSCAPE_TRACE_PAGE", "").lower() in ("1","true","yes","on")
 
+        # Kick off adblock init (deferred if fast start to unblock UI sooner)
+        adblock_delay = 1200 if self.fast_start else 0
+        QTimer.singleShot(adblock_delay, self._init_adblock_legacy)
+
+        # Tabs
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.tabs.tabBarDoubleClicked.connect(self.tab_open_doubleclick)
         self.tabs.currentChanged.connect(self.current_tab_changed)
         self.tabs.setMovable(True)
-        # Configure tabs based on settings
         self.tabs.setTabsClosable(self.settings_manager.get('show_tab_close_buttons', True))
-        
-        # Set tab position
         tab_position = self.settings_manager.get('tab_position', 'top')
-        if tab_position == 'bottom':
-            self.tabs.setTabPosition(QTabWidget.TabPosition.South)
-        else:
-            self.tabs.setTabPosition(QTabWidget.TabPosition.North)
+        self.tabs.setTabPosition(QTabWidget.TabPosition.South if tab_position == 'bottom' else QTabWidget.TabPosition.North)
         self.tabs.tabCloseRequested.connect(self.close_current_tab)
-        
-        # Performance: Initialize tab loading pool
-        self.tab_loading_pool = set()  # Track loading tabs
+        self.tab_loading_pool = set()
         self.setCentralWidget(self.tabs)
 
-        # Performance: Defer session restoration for faster startup
-        if self.settings_manager.get('restore_session', True):
-            QTimer.singleShot(200, self.restore_session)
+        # Session restore / first tab (blank quick tab if fast start enabled)
+        if self.fast_start:
+            # Show a blank lightweight tab immediately
+            self.add_new_tab(QUrl("about:blank"), "New Tab")
+            if self.settings_manager.get('restore_session', True):
+                QTimer.singleShot(500, self.restore_session)
+            else:
+                QTimer.singleShot(400, lambda: self.tabs.currentWidget().setUrl(QUrl(self.homepage_url)))
         else:
-            QTimer.singleShot(150, lambda: self.add_new_tab(QUrl(self.homepage_url), "Homepage"))
-        
+            if self.settings_manager.get('restore_session', True):
+                QTimer.singleShot(200, self.restore_session)
+            else:
+                QTimer.singleShot(150, lambda: self.add_new_tab(QUrl(self.homepage_url), "Homepage"))
+
+        # Menus / shortcuts
         self.create_menu_bar()
         self.create_shortcuts()
 
-        # Populate history and bookmarks menus
-        self.update_history_menu()
-        self.update_bookmarks_menu()
-        self.update_cookies_menu()  # Update cookies menu
-        # Initialize URL bar autocomplete from history and bookmarks
-        self.update_url_autocomplete()
-        
-        # Performance: Defer cookie loading until tabs are created
-        QTimer.singleShot(300, self.load_cookies_to_web_engine)
-        
-        # Load settings using new settings manager
+        # Delayed menu population (further deferred in fast start mode)
+        base_delay = 500 if self.fast_start else 200
+        QTimer.singleShot(base_delay + 0, self.update_history_menu)
+        QTimer.singleShot(base_delay + 10, self.update_bookmarks_menu)
+        QTimer.singleShot(base_delay + 30, self.update_cookies_menu)
+        QTimer.singleShot(base_delay + 50, self.update_url_autocomplete)
+
+        # Deferred cookie store sync (later if fast start)
+        QTimer.singleShot(900 if self.fast_start else 300, self.load_cookies_to_web_engine)
+
+        # Apply settings (deferred)
         self.load_settings()
-        # Performance: Defer settings application for faster startup
-        QTimer.singleShot(100, self._apply_settings_to_browser)
-        
-        # Refresh developer tools data after browser is fully initialized
-        self.dev_tools.refresh_all_data()
+        QTimer.singleShot(300 if self.fast_start else 100, self._apply_settings_to_browser)
+
+        # DevTools loads lazily on first open
+
+    def _deferred_load_json(self, which:str):
+        try:
+            if which == 'bookmarks':
+                self.bookmarks = self.load_json(self.bookmarks_file)
+            elif which == 'history':
+                self.history = self.load_json(self.history_file)
+            elif which == 'cookies':
+                self.cookies = self.load_json(self.cookies_file)
+        except Exception:
+            pass
+
+    def _ensure_download_manager(self):
+        if self.download_manager is None:
+            self.download_manager = DownloadManager(self)
+            QWebEngineProfile.defaultProfile().downloadRequested.connect(self.handle_download_request)
+        return self.download_manager
+
+    def _ensure_find_dialog(self):
+        if self.find_dialog is None:
+            self.find_dialog = FindDialog(self, self)
+        return self.find_dialog
+
+    def _ensure_dev_tools(self):
+        if self.dev_tools is None:
+            self.dev_tools = DevToolsDialog(self, self)
+        return self.dev_tools
 
     def load_json(self, file_path):
         """Load data from a JSON file, or return an empty list if the file doesn't exist."""
@@ -3786,7 +4026,8 @@ class Browser(QMainWindow):
         browser.urlChanged.connect(lambda qurl, i=i: self._update_tab_favicon(i, qurl))
         browser.loadFinished.connect(lambda _, i=i, browser=browser: self._on_tab_load_finished(i, browser))
         browser.page().iconUrlChanged.connect(lambda _url, i=i, b=browser: self._update_tab_favicon(i, b.url()))
-        browser.loadStarted.connect(lambda: self._on_tab_load_started(browser))
+        # Use direct bound method via lambda capturing default argument
+        browser.loadStarted.connect(lambda b=browser: self._on_tab_load_started(b))
         browser.page().profile().cookieStore().cookieAdded.connect(self.add_cookie)  # Add cookie
         
         # Apply current settings to the new tab
@@ -5203,8 +5444,22 @@ class Browser(QMainWindow):
         """Handle tab loading start with performance optimizations"""
         self.tab_loading_pool.add(browser)
         # Performance: Disable expensive operations during loading
-        if hasattr(self, 'dev_tools') and self.dev_tools.isVisible():
-            self.dev_tools.pause_updates()
+        dt = getattr(self, 'dev_tools', None)
+        if dt is not None:
+            try:
+                if dt.isVisible():
+                    dt.pause_updates()
+            except Exception:
+                pass
+        # Adblock: prefetch domain-specific rule subset early using CPU pool
+        try:
+            if self.ad_blocker_rules and getattr(self.ad_blocker_rules, 'prefetch_domain', None):
+                qurl = browser.url() if hasattr(browser, 'url') else None
+                host = qurl.host() if qurl else ''
+                if host:
+                    self.ad_blocker_rules.prefetch_domain(host)
+        except Exception:
+            pass
     
     def _on_tab_load_finished(self, tab_index, browser):
         """Handle tab loading completion with performance optimizations"""
@@ -5224,8 +5479,89 @@ class Browser(QMainWindow):
         QTimer.singleShot(50, lambda: self.add_to_history(browser.url(), browser.page().title()))
         
         # Re-enable dev tools updates if no tabs are loading
-        if not self.tab_loading_pool and hasattr(self, 'dev_tools') and self.dev_tools.isVisible():
-            self.dev_tools.resume_updates()
+        if (not self.tab_loading_pool and
+            getattr(self, 'dev_tools', None) is not None):
+            try:
+                if self.dev_tools.isVisible():
+                    self.dev_tools.resume_updates()
+            except Exception:
+                pass
+        # Lightweight performance markers (optional) - collect and print key paint metrics
+                if getattr(self, 'perf_trace', False):
+                        try:
+                                if browser and hasattr(browser, 'page'):
+                                        page = browser.page()
+                                        js = """
+                                                (function(){
+                                                    if(!window.performance){return null;}
+                                                    let nav = (performance.getEntriesByType && performance.getEntriesByType('navigation')) ? performance.getEntriesByType('navigation')[0] : null;
+                                                    let paint = (performance.getEntriesByType && performance.getEntriesByType('paint')) ? performance.getEntriesByType('paint') : [];
+                                                    let fp = null; let fcp = null;
+                                                    for (const p of paint){ if(p.name==='first-paint') fp = p.startTime; if(p.name==='first-contentful-paint') fcp = p.startTime; }
+                                                    const t = performance.timing || {};
+                                                    function clamp(v){return (typeof v==='number' && v>=0 && v<1e8)? v : null;}
+                                                    let metrics = {};
+                                                    if(nav){
+                                                        metrics = {
+                                                            dns: clamp(nav.domainLookupEnd - nav.domainLookupStart),
+                                                            connect: clamp(nav.connectEnd - nav.connectStart),
+                                                            ttfb: clamp(nav.responseStart - nav.startTime),
+                                                            response: clamp(nav.responseEnd - nav.responseStart),
+                                                            domContentLoaded: clamp(nav.domContentLoadedEventEnd - nav.startTime),
+                                                            firstPaint: clamp(fp),
+                                                            firstContentfulPaint: clamp(fcp),
+                                                            load: clamp(nav.loadEventEnd - nav.startTime)
+                                                        };
+                                                    } else if(t.navigationStart){
+                                                        const ns = t.navigationStart;
+                                                        metrics = {
+                                                            dns: clamp(t.domainLookupEnd - t.domainLookupStart),
+                                                            connect: clamp(t.connectEnd - t.connectStart),
+                                                            ttfb: clamp(t.responseStart - ns),
+                                                            response: clamp(t.responseEnd - t.responseStart),
+                                                            domContentLoaded: clamp(t.domContentLoadedEventEnd - ns),
+                                                            firstPaint: clamp(fp),
+                                                            firstContentfulPaint: clamp(fcp),
+                                                            load: clamp(t.loadEventEnd - ns)
+                                                        };
+                                                    }
+                                                    // Gather top slow resources (exclude data: and chrome-extension:)
+                                                    let slow = [];
+                                                    if (performance.getEntriesByType){
+                                                        const resources = performance.getEntriesByType('resource') || [];
+                                                        for (const r of resources){
+                                                            if((r.initiatorType==='img'||r.initiatorType==='script'||r.initiatorType==='css'||r.initiatorType==='fetch'||r.initiatorType==='xmlhttprequest') && r.duration>500){
+                                                                 if(r.name.startsWith('data:')||r.name.startsWith('chrome-extension')) continue;
+                                                                 slow.push({name:r.name.slice(0,140), type:r.initiatorType, dur: Math.round(r.duration)});
+                                                            }
+                                                        }
+                                                        slow.sort((a,b)=>b.dur - a.dur);
+                                                        metrics.slow = slow.slice(0,5);
+                                                    }
+                                                    return metrics;
+                                                })();
+                                        """
+                                        page.runJavaScript(js,  lambda m: self._log_perf_metrics(m))
+                        except Exception:
+                                pass
+
+    def _log_perf_metrics(self, metrics):
+        try:
+            if not metrics:
+                return
+            slow_str = ''
+            slow = metrics.get('slow') or []
+            if slow:
+                parts = [f"{s['type']}:{s['dur']}ms" for s in slow]
+                slow_str = ' slow=[' + ', '.join(parts) + ']'
+            print(
+                "PagePerf "
+                f"dns={metrics.get('dns')}ms connect={metrics.get('connect')}ms ttfb={metrics.get('ttfb')}ms "
+                f"resp={metrics.get('response')}ms dcl={metrics.get('domContentLoaded')}ms fp={metrics.get('firstPaint')}ms "
+                f"fcp={metrics.get('firstContentfulPaint')}ms load={metrics.get('load')}ms" + slow_str
+            )
+        except Exception:
+            pass
     
     def refresh_current_tab(self):
         """Refresh the current tab safely"""
@@ -5416,13 +5752,13 @@ class Browser(QMainWindow):
                 current_widget.page().printToPdf(printer.outputFileName() or "page.pdf")
     
     def show_developer_tools(self):
-        self.dev_tools.show()
-        self.dev_tools.raise_()
-        self.dev_tools.activateWindow()
-        
-        # Refresh data if browser is fully initialized
+        dt = self._ensure_dev_tools()
+        dt.show()
+        dt.raise_()
+        dt.activateWindow()
         if hasattr(self, 'tabs') and self.tabs is not None:
-            self.dev_tools.refresh_all_data()
+            # Refresh lazily shortly after showing to keep UI responsive
+            QTimer.singleShot(50, dt.refresh_all_data)
     
     def save_session(self):
         session_data = []
@@ -5484,7 +5820,9 @@ class Browser(QMainWindow):
     def _init_adblock_legacy(self):
         """Use the original AdBlockerWorker to build rules, then attach them."""
         async def run():
-            worker = AdBlockerWorker()
+            # Pass CPU pool and cache path so subset compilation can use multiprocessing and cached list
+            cache_path = os.path.join(self.data_dir, 'adblock_lists.cache')
+            worker = AdBlockerWorker(cpu_pool=self.cpu_pool, cache_path=cache_path)
             await worker.download_adblock_lists()
             # In incremental mode worker.rules may be None intentionally
             if not worker.incremental_enabled and not worker.rules:
@@ -5542,6 +5880,10 @@ if __name__ == "__main__":
     default_workers = 1 if SAFE_MODE else (os.cpu_count() or 1)
     parser.add_argument("--workers", type=int, default=default_workers,
                         help="Number of worker processes for CPU-bound tasks (markdown rendering, adblock parsing). Set 1 to disable multiprocessing.")
+    # Fast start control (fast start enabled by default)
+    fast_group = parser.add_mutually_exclusive_group()
+    fast_group.add_argument("--fast-start", action="store_true", help="Force enable fast start optimizations (default)")
+    fast_group.add_argument("--no-fast-start", action="store_true", help="Disable fast start (loads everything eagerly)")
     args, unknown = parser.parse_known_args()
 
     # Force 'spawn' to avoid Qt duplication caused by 'fork' (especially in packaged builds)
@@ -5583,7 +5925,19 @@ if __name__ == "__main__":
             single_instance_server.listen(instance_key)
         # Keep reference so it isn't GC'd
         app._single_instance_server = single_instance_server
-    window = Browser(cpu_pool=cpu_pool)
+    # Determine fast_start flag from CLI (env handled inside Browser if None)
+    fast_start_flag = True
+    if args.no_fast_start:
+        fast_start_flag = False
+    elif args.fast_start:
+        fast_start_flag = True
+    window = Browser(cpu_pool=cpu_pool, fast_start=fast_start_flag)
+    # Simple startup timing log (cold vs warm insight)
+    try:
+        elapsed = (time.time() - APP_START_TS)*1000
+        print(f"Startup (Browser window created) in {elapsed:.1f} ms")
+    except Exception:
+        pass
     window.show()
     exit_code = app.exec()
     try:
