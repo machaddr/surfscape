@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
 import os, sys, json, asyncio, aiohttp, re, pyaudio, speech_recognition as sr, anthropic, markdown, time, platform
-import argparse, concurrent.futures, multiprocessing
+import argparse, concurrent.futures, multiprocessing, threading
 from PyQt6.QtCore import QUrl, Qt , QDateTime, QThread, pyqtSignal, QObject, QStandardPaths, QTimer, QSize, QCoreApplication
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog, QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QCheckBox, QSpinBox, QComboBox, QSlider, QGroupBox, QGridLayout, QScrollArea, QTextEdit, QFrame, QWidget, QSplitter
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
@@ -194,12 +194,19 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
                 info.block(True)
             return
 
-        # Full rule evaluation
+        # Full rule evaluation (supports either a direct AdblockRules engine or an incremental provider)
         if self.ad_blocker_rules:
             blocked = False
+            engine = None
             try:
-                # If prefilter hinted block, we still ask the rules engine with context
-                blocked = self.ad_blocker_rules.should_block(url, options)
+                # If provider supports per-domain engines, fetch lazily
+                if hasattr(self.ad_blocker_rules, 'get_rules_for') and callable(getattr(self.ad_blocker_rules, 'get_rules_for')):
+                    first_party_host = options.get('domain') or host
+                    engine = self.ad_blocker_rules.get_rules_for(first_party_host)
+                else:
+                    engine = self.ad_blocker_rules
+                if engine:
+                    blocked = engine.should_block(url, options)
             except Exception:
                 blocked = False
             # Update cache
@@ -3439,10 +3446,30 @@ class ClaudeAIWidget(QWidget):
 
 class AdBlockerWorker:
     def __init__(self, rules=None):
-        self.rules = rules
+        self.rules = rules  # Monolithic engine (legacy)
+        # Incremental mode attributes
+        self._all_rule_lines: list[str] | None = None
+        self._domain_index: dict[str, list[int]] = {}
+        self._compiled_cache: dict[str, AdblockRules] = {}
+        self._compiled_cache_order: list[str] = []
+        self._compiled_cache_limit = 64  # distinct first-party domains
+        self._lock = threading.RLock()
+        self.incremental_enabled = True  # can be toggled off if building index fails
 
     async def download_adblock_lists(self):
-        """Download EasyList + EasyPrivacy and build AdblockRules."""
+        """Download EasyList + EasyPrivacy. Build either monolithic or incremental structures.
+
+        Strategy:
+          1. Download full lists (still required to allow per-page extraction)
+          2. Keep raw lines in memory (string list)
+          3. Build a light domain keyword index: map domain tokens (example.com) to line indexes
+             Heuristic extraction: for lines containing '||example.com^' or '/example.com/' typical in EasyList.
+          4. On-demand (get_rules_for), compile a small subset of rules relevant to the first-party domain:
+               - All exception rules (@@) referencing the domain
+               - All blocking rules referencing the domain
+               - A minimum fallback set (generic rules limited to 300 lines) to still catch generic ads
+          5. Cache compiled subsets (LRU) to keep memory/time balanced.
+        """
         urls = [
             "https://easylist.to/easylist/easylist.txt",
             "https://easylist.to/easylist/easyprivacy.txt",
@@ -3465,13 +3492,109 @@ class AdBlockerWorker:
         if not lines:
             self.rules = None
             return
+        # Keep raw lines for incremental mode
+        self._all_rule_lines = lines
+        # Attempt to build lightweight domain index
         try:
-            self.rules = AdblockRules(lines, supported_options=[
-                'domain','third-party','image','script','stylesheet','xmlhttprequest','subdocument','document','media','font','object','ping','other'
-            ])
+            domain_pattern = re.compile(r"\|\|([a-z0-9.-]+)\^(?:[$\w]|$)")
+            for idx, line in enumerate(lines):
+                if not line or line.startswith('!'):
+                    continue
+                # Extract primary domain tokens
+                for m in domain_pattern.finditer(line):
+                    dom = m.group(1).lower()
+                    # Normalize: strip leading 'www.'
+                    if dom.startswith('www.'):
+                        dom = dom[4:]
+                    bucket = self._domain_index.setdefault(dom, [])
+                    bucket.append(idx)
+            # If index is very small or suspicious, fall back to monolithic engine
+            if len(self._domain_index) < 100:  # heuristic threshold
+                raise RuntimeError("Domain index too small; falling back to monolithic rules")
         except Exception as e:
-            print(f"Adblock rules build failed: {e}")
-            self.rules = None
+            print(f"Adblock incremental index build failed: {e}; using monolithic engine")
+            self.incremental_enabled = False
+            try:
+                self.rules = AdblockRules(lines, supported_options=[
+                    'domain','third-party','image','script','stylesheet','xmlhttprequest','subdocument','document','media','font','object','ping','other'
+                ])
+            except Exception as e2:
+                print(f"Adblock rules build failed: {e2}")
+                self.rules = None
+            return
+        # Success: do NOT build monolithic rules now; postpone per-domain subset compilation
+        self.rules = None  # explicit: not using global engine
+
+    def _lru_touch(self, key: str):
+        try:
+            if key in self._compiled_cache_order:
+                self._compiled_cache_order.remove(key)
+            self._compiled_cache_order.append(key)
+            while len(self._compiled_cache_order) > self._compiled_cache_limit:
+                old = self._compiled_cache_order.pop(0)
+                old_engine = self._compiled_cache.pop(old, None)
+                # Let GC reclaim
+        except Exception:
+            pass
+
+    def get_rules_for(self, first_party_domain: str):
+        """Return (and possibly build) an AdblockRules engine focused on first_party_domain.
+
+        Falls back to monolithic engine if incremental mode disabled.
+        """
+        if not first_party_domain:
+            first_party_domain = ''
+        host = first_party_domain.lower()
+        if host.startswith('www.'):
+            host = host[4:]
+        # If monolithic engine exists or incremental disabled
+        if not self.incremental_enabled:
+            return self.rules
+        with self._lock:
+            if host in self._compiled_cache:
+                self._lru_touch(host)
+                return self._compiled_cache[host]
+            # Collect candidate rule lines
+            line_indexes = set()
+            parts = host.split('.') if host else []
+            # Include progressively shorter eTLD+1 style tokens
+            for i in range(max(0, len(parts)-2), len(parts)):
+                token = '.'.join(parts[i:])
+                if token in self._domain_index:
+                    for idx in self._domain_index[token]:
+                        line_indexes.add(idx)
+            # Always include exception rules referencing host
+            if self._all_rule_lines:
+                exc_pattern = re.compile(r"@@.*" + re.escape(host))
+                for idx, line in enumerate(self._all_rule_lines):
+                    if '@@' in line and host and exc_pattern.search(line):
+                        line_indexes.add(idx)
+            # Provide a small generic subset (first 250 non-comment generic cosmetic/network rules) to catch general ads
+            generic_subset = []
+            if self._all_rule_lines:
+                for line in self._all_rule_lines:
+                    if len(generic_subset) >= 250:
+                        break
+                    if not line or line.startswith('!'):
+                        continue
+                    if '##' in line or '#@#' in line:
+                        continue  # Skip cosmetic for performance (adblockparser ignores cosmetic anyway)
+                    if '||' not in line:
+                        generic_subset.append(line)
+            # Build final line list
+            if not line_indexes and not generic_subset:
+                return None
+            selected = [self._all_rule_lines[i] for i in sorted(line_indexes)] + generic_subset
+            try:
+                engine = AdblockRules(selected, supported_options=[
+                    'domain','third-party','image','script','stylesheet','xmlhttprequest','subdocument','document','media','font','object','ping','other'
+                ])
+                self._compiled_cache[host] = engine
+                self._lru_touch(host)
+                return engine
+            except Exception as e:
+                print(f"Adblock subset build failed for {host}: {e}")
+                return None
 
 class Browser(QMainWindow):
     def __init__(self, cpu_pool=None):
@@ -5363,17 +5486,22 @@ class Browser(QMainWindow):
         async def run():
             worker = AdBlockerWorker()
             await worker.download_adblock_lists()
-            rules = worker.rules
-            if not rules:
+            # In incremental mode worker.rules may be None intentionally
+            if not worker.incremental_enabled and not worker.rules:
                 print("Adblock: no rules built")
                 return
-            self.ad_blocker_rules = rules
-            # Attach to both interceptors
+            # Store worker as provider (supports get_rules_for)
+            self.ad_blocker_rules = worker
             if hasattr(self, 'network_interceptor'):
-                self.network_interceptor.ad_blocker_rules = rules
+                self.network_interceptor.ad_blocker_rules = worker
             if hasattr(self, 'private_network_interceptor'):
-                self.private_network_interceptor.ad_blocker_rules = rules
-            print(f"Ad blocker ready: {len(getattr(rules, 'rules', []))} rules")
+                self.private_network_interceptor.ad_blocker_rules = worker
+            if worker.incremental_enabled:
+                total_lines = len(worker._all_rule_lines or [])
+                print(f"Ad blocker incremental mode ready (raw lines: {total_lines}, indexed domains: {len(worker._domain_index)})")
+            else:
+                rules = worker.rules
+                print(f"Ad blocker monolithic mode ready: {len(getattr(rules, 'rules', [])) if rules else 0} rules")
 
         def _runner():
             try:
