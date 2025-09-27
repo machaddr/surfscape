@@ -5894,7 +5894,7 @@ if __name__ == "__main__":
     window = Browser(cpu_pool=cpu_pool, fast_start=fast_start_flag)
     # Simple startup timing log (cold vs warm insight)
     try:
-        elapsed = (time.time() - APP_START_TS)*1000
+        elapsed = (time.time())*1000
         print(f"Startup (Browser window created) in {elapsed:.1f} ms")
     except Exception:
         pass
