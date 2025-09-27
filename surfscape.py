@@ -3935,12 +3935,10 @@ class Browser(QMainWindow):
 
         # Session restore / first tab (blank quick tab if fast start enabled)
         if self.fast_start:
-            # Show a blank lightweight tab immediately
-            self.add_new_tab(QUrl("about:blank"), "New Tab")
             if self.settings_manager.get('restore_session', True):
                 QTimer.singleShot(500, self.restore_session)
             else:
-                QTimer.singleShot(400, lambda: self.tabs.currentWidget().setUrl(QUrl(self.homepage_url)))
+                QTimer.singleShot(400, lambda: self.add_new_tab(QUrl(self.homepage_url), "Homepage"))
         else:
             if self.settings_manager.get('restore_session', True):
                 QTimer.singleShot(200, self.restore_session)
