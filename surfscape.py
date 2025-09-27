@@ -13,59 +13,6 @@ from PyQt6.QtNetwork import QNetworkCookie, QNetworkProxy, QNetworkAccessManager
 from PyQt6.QtWebEngineCore import QWebEngineUrlRequestInterceptor, QWebEngineProfile, QWebEngineSettings
 from adblockparser import AdblockRules
 
-# --- Early runtime safety configuration (must run before QApplication) ----------------------
-
-def _is_arm_platform() -> bool:
-    try:
-        arch = (platform.machine() or "").lower()
-        return any(a in arch for a in ("aarch64", "arm64", "armv7l", "armv6l", "arm"))
-    except Exception:
-        return False
-
-def _configure_runtime_safety() -> bool:
-    """Configure conservative defaults on platforms prone to GPU/GL driver issues (e.g., Raspberry Pi ARM).
-    Returns whether safe mode is active.
-    """
-    is_arm = _is_arm_platform()
-    env_safe = os.environ.get("SURFSCAPE_SAFE_MODE")
-    safe_mode = (env_safe.lower() in ("1", "true", "yes") if isinstance(env_safe, str)
-                 else is_arm)
-
-    if safe_mode:
-        # Prefer software rendering to avoid GPU driver crashes
-        os.environ.setdefault("LIBGL_ALWAYS_SOFTWARE", "1")
-        os.environ.setdefault("QT_OPENGL", "software")
-        os.environ.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
-        # Qt Quick/Scene Graph software backends (Qt 6 RHI)
-        os.environ.setdefault("QSG_RHI_BACKEND", "software")
-        os.environ.setdefault("QT_QUICK_BACKEND", "software")
-
-        # Merge in Chromium flags without clobbering user-provided ones
-        existing = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
-        want_flags = [
-            "--disable-gpu",
-            "--disable-gpu-compositing",
-            "--enable-software-rasterizer",
-            "--use-gl=swiftshader",
-        ]
-        merged = existing.split() if existing else []
-        for f in want_flags:
-            if f not in merged:
-                merged.append(f)
-        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = " ".join(merged).strip()
-
-        # Ask Qt to use software OpenGL. Must be set before QApplication is created.
-        try:
-            QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_UseSoftwareOpenGL, True)
-        except Exception:
-            pass
-
-    return safe_mode
-
-# Compute safe-mode as early as possible
-APP_START_TS = time.time()
-SAFE_MODE = _configure_runtime_safety()
-
 # --- Multi-core / CPU pool utilities ---------------------------------------------------------
 
 def _markdown_convert_task(text: str, enable_markdown: bool):
@@ -95,7 +42,7 @@ class CPUPool:
       * Provides a fire-and-forget style callback marshalled onto the GUI thread when possible.
     """
     def __init__(self, workers: int | None):
-        if SAFE_MODE:
+        if False:
             # Avoid multiprocessing on platforms/drivers known to behave poorly with fork/spawn + QtWebEngine
             self.workers = 1
         else:
@@ -435,7 +382,7 @@ class SettingsManager:
             'enable_javascript': True,
             'enable_plugins': True,
             'enable_images': True,
-            'enable_webgl': False if SAFE_MODE else True,
+            'enable_webgl': True,
             'enable_geolocation': False,
             'enable_notifications': True,
             'enable_autoplay': False,
@@ -469,7 +416,7 @@ class SettingsManager:
             # Advanced Settings
             'enable_developer_tools': True,
             # Default to software on platforms that often crash with GPU drivers
-            'enable_hardware_acceleration': False if SAFE_MODE else True,
+            'enable_hardware_acceleration': True,
             'max_cache_size': 100,  # MB
             'enable_spell_check': True,
             'spell_check_language': 'en-US',
@@ -3560,7 +3507,7 @@ class AdBlockerWorker:
         if not lines:
             urls = [
                 "https://easylist.to/easylist/easylist.txt",
-                "https://easylist.to/easylist/easyprivacy.txt",
+                "https://easylist.to/easylist/easyprivacy.txt"
             ]
             texts = []
             try:
@@ -5430,7 +5377,7 @@ class Browser(QMainWindow):
         settings = profile.settings()
         if settings:
             # Enable hardware acceleration and optimizations
-            accel = False if SAFE_MODE else True
+            accel = True
             settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, accel)
             settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, accel)
             settings.setAttribute(QWebEngineSettings.WebAttribute.PdfViewerEnabled, True)
@@ -5590,9 +5537,6 @@ class Browser(QMainWindow):
         enable_autoplay = self.settings_manager.get('enable_autoplay', False)
         block_popups = self.settings_manager.get('block_popups', True)
         enable_hw_accel = self.settings_manager.get('enable_hardware_acceleration', True)
-        if SAFE_MODE:
-            enable_webgl = False
-            enable_hw_accel = False
         
         # Apply to default profile settings
         default_profile = QWebEngineProfile.defaultProfile()
@@ -5891,7 +5835,7 @@ class Browser(QMainWindow):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Surfscape Browser")
-    default_workers = 1 if SAFE_MODE else (os.cpu_count() or 1)
+    default_workers = os.cpu_count() or 1
     parser.add_argument("--workers", type=int, default=default_workers,
                         help="Number of worker processes for CPU-bound tasks (markdown rendering, adblock parsing). Set 1 to disable multiprocessing.")
     # Fast start control (fast start enabled by default)
