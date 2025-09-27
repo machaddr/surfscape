@@ -5431,6 +5431,11 @@ class Browser(QMainWindow):
             # Optimize loading
             settings.setAttribute(QWebEngineSettings.WebAttribute.AutoLoadImages, True)
             settings.setAttribute(QWebEngineSettings.WebAttribute.DnsPrefetchEnabled, True)
+            # Enable HTTP/2 for faster multiplexing
+            try:
+                settings.setAttribute(QWebEngineSettings.WebAttribute.Http2Enabled, True)
+            except AttributeError:
+                pass  # Not available in older Qt
             
             # Memory optimizations
             settings.setAttribute(QWebEngineSettings.WebAttribute.FocusOnNavigationEnabled, False)
