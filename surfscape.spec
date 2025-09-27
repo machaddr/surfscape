@@ -1,5 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+import PyInstaller
+
+rthook_path = os.path.join(PyInstaller.__path__[0], 'hooks', 'rthooks', 'pyi_rth_multiprocessing.py')
 
 a = Analysis(
     ['surfscape.py'],
@@ -9,7 +13,7 @@ a = Analysis(
     hiddenimports=['multiprocessing.popen_spawn_posix','multiprocessing.popen_spawn_win32','multiprocessing.util'],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=['pyi_rth_multiprocessing'],
+    runtime_hooks=[rthook_path],
     excludes=[],
     noarchive=False,
     optimize=0,
