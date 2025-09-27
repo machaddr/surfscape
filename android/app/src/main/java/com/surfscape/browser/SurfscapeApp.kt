@@ -8,7 +8,6 @@ import com.surfscape.browser.BuildConfig
 
 class SurfscapeApp : Application() {
     lateinit var runtime: GeckoRuntime
-        private set
 
     override fun onCreate() {
         super.onCreate()

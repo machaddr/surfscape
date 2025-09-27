@@ -46,14 +46,15 @@ class MainActivity : AppCompatActivity() {
         // Check if GeckoRuntime is available before proceeding
         try {
             val app = application as SurfscapeApp
-            if (!app::runtime.isInitialized) {
-                Log.e("Surfscape", "GeckoRuntime not initialized - cannot start browser")
-                Toast.makeText(this, "Browser engine not available", Toast.LENGTH_LONG).show()
-                finish()
-                return
-            }
+            // Try to access runtime to see if it's initialized
+            app.runtime
+        } catch (e: UninitializedPropertyAccessException) {
+            Log.e("Surfscape", "GeckoRuntime not initialized - cannot start browser", e)
+            Toast.makeText(this, "Browser engine not available", Toast.LENGTH_LONG).show()
+            finish()
+            return
         } catch (e: Exception) {
-            Log.e("Surfscape", "Failed to access application", e)
+            Log.e("Surfscape", "Failed to access application runtime", e)
             finish()
             return
         }
