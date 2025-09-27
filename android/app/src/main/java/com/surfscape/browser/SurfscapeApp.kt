@@ -57,7 +57,10 @@ class SurfscapeApp : Application() {
             Log.i("Surfscape", "GeckoRuntime initialized in ${dur} ms")
         } catch (t: Throwable) {
             Log.e("Surfscape", "Failed to initialize GeckoRuntime", t)
-            throw t
+            // Don't crash the app - create a minimal fallback or show error in activity
+            Log.e("Surfscape", "GeckoRuntime initialization failed - app may not function properly")
+            // We still throw to prevent app from starting with broken state
+            throw RuntimeException("Browser engine initialization failed", t)
         }
     }
 }

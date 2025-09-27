@@ -42,6 +42,22 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Check if GeckoRuntime is available before proceeding
+        try {
+            val app = application as SurfscapeApp
+            if (!app::runtime.isInitialized) {
+                Log.e("Surfscape", "GeckoRuntime not initialized - cannot start browser")
+                Toast.makeText(this, "Browser engine not available", Toast.LENGTH_LONG).show()
+                finish()
+                return
+            }
+        } catch (e: Exception) {
+            Log.e("Surfscape", "Failed to access application", e)
+            finish()
+            return
+        }
+
         setContentView(R.layout.activity_main)
 
         // Enable StrictMode in debug builds to surface potential main-thread violations.
@@ -55,6 +71,7 @@ class MainActivity : AppCompatActivity() {
             StrictMode.setVmPolicy(
                 StrictMode.VmPolicy.Builder()
                     .detectLeakedClosableObjects()
+                    .detectActivityLeaks()
                     .penaltyLog()
                     .build()
             )
@@ -95,14 +112,16 @@ class MainActivity : AppCompatActivity() {
                 permissions: MutableList<GeckoSession.PermissionDelegate.ContentPermission>,
                 hasUserGesture: Boolean
             ) {
-                if (url != null) {
+                if (url != null && !isFinishing && !isDestroyed) {
                     Log.d("Surfscape", "LocationChange: ${url}")
                     runOnUiThread {
-                        urlBar.setText(url)
-                        statusBar.text = url
-                        // Persist last successful location
-                        getSharedPreferences(prefsName, MODE_PRIVATE)
-                            .edit().putString(keyLastUrl, url).apply()
+                        if (!isFinishing && !isDestroyed) {
+                            urlBar.setText(url)
+                            statusBar.text = url
+                            // Persist last successful location
+                            getSharedPreferences(prefsName, MODE_PRIVATE)
+                                .edit().putString(keyLastUrl, url).apply()
+                        }
                     }
                 }
             }
@@ -114,7 +133,13 @@ class MainActivity : AppCompatActivity() {
         contentDelegate = object : ContentDelegate {
             override fun onTitleChange(session: GeckoSession, title: String?) {
                 title?.let {
-                    runOnUiThread { this@MainActivity.title = it }
+                    if (!isFinishing && !isDestroyed) {
+                        runOnUiThread {
+                            if (!isFinishing && !isDestroyed) {
+                                this@MainActivity.title = it
+                            }
+                        }
+                    }
                 }
             }
 
@@ -128,16 +153,24 @@ class MainActivity : AppCompatActivity() {
                 prefs.edit().putLong(keyLastCrashTs, now).putInt(keyCrashCount, newCount).apply()
                 if (newCount > crashBackoffMax) {
                     Log.e("Surfscape", "Crash loop detected (>$crashBackoffMax in window); not restarting automatically.")
-                    runOnUiThread {
-                        Toast.makeText(this@MainActivity, "Browser crashed repeatedly; restart app.", Toast.LENGTH_LONG).show()
+                    if (!isFinishing && !isDestroyed) {
+                        runOnUiThread {
+                            if (!isFinishing && !isDestroyed) {
+                                Toast.makeText(this@MainActivity, "Browser crashed repeatedly; restart app.", Toast.LENGTH_LONG).show()
+                            }
+                        }
                     }
                     return
                 }
-                runOnUiThread {
-                    try {
-                        geckoSession.close()
-                    } catch (_: Exception) { }
-                    restartGeckoSession()
+                if (!isFinishing && !isDestroyed) {
+                    runOnUiThread {
+                        if (!isFinishing && !isDestroyed) {
+                            try {
+                                geckoSession.close()
+                            } catch (_: Exception) { }
+                            restartGeckoSession()
+                        }
+                    }
                 }
             }
         }
@@ -178,6 +211,10 @@ class MainActivity : AppCompatActivity() {
                 Log.w("Surfscape", "loadUrl called before session ready; ignoring: ${raw}")
                 return
             }
+            if (!this::runtime.isInitialized) {
+                Log.w("Surfscape", "loadUrl called before runtime ready; ignoring: ${raw}")
+                return
+            }
             val trimmed = raw.trim()
             if (trimmed.isEmpty()) return
             val isLikelyUrl = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://").containsMatchIn(trimmed) ||
@@ -208,18 +245,20 @@ class MainActivity : AppCompatActivity() {
             } else false
         }
 
-        // Back press handling via dispatcher (replaces deprecated onBackPressed())
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                if (this@MainActivity::geckoSession.isInitialized && canGoBackFlag) {
-                    geckoSession.goBack()
-                } else {
-                    // Disable callback temporarily to allow system default
-                    isEnabled = false
-                    onBackPressedDispatcher.onBackPressed()
+        // Back press handling - use new API if available, fallback for older versions
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+                override fun handleOnBackPressed() {
+                    if (this@MainActivity::geckoSession.isInitialized && canGoBackFlag) {
+                        geckoSession.goBack()
+                    } else {
+                        // Disable callback temporarily to allow system default
+                        isEnabled = false
+                        onBackPressedDispatcher.onBackPressed()
+                    }
                 }
-            }
-        })
+            })
+        }
 
         // Initial page: restore last URL if present
         val selfTest = System.getenv("SURFSCAPE_SELFTEST") == "1"
@@ -246,10 +285,17 @@ class MainActivity : AppCompatActivity() {
     private fun restartGeckoSession() {
         Log.i("Surfscape", "Restarting GeckoSession")
         try { geckoSession.close() } catch (_: Exception) { }
-        initializeNewSession()
-        val restoreUrl = getSharedPreferences(prefsName, MODE_PRIVATE)
-            .getString(keyLastUrl, HOME_URL) ?: HOME_URL
-        geckoSession.loadUri(restoreUrl)
+        try {
+            initializeNewSession()
+            val restoreUrl = getSharedPreferences(prefsName, MODE_PRIVATE)
+                .getString(keyLastUrl, HOME_URL) ?: HOME_URL
+            geckoSession.loadUri(restoreUrl)
+        } catch (e: Exception) {
+            Log.e("Surfscape", "Failed to restart GeckoSession", e)
+            runOnUiThread {
+                Toast.makeText(this, "Failed to restart browser", Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     private fun initializeNewSession() {
@@ -270,8 +316,13 @@ class MainActivity : AppCompatActivity() {
 
             // Stage 1: load about:blank explicitly and set a watchdog.
             try {
-                session.loadUri("about:blank")
-                Log.d("Surfscape", "Loaded about:blank as staging page")
+                // Small delay to ensure session is fully ready
+                android.os.Handler(mainLooper).postDelayed({
+                    if (this::geckoSession.isInitialized && geckoSession === session && geckoSession.isOpen) {
+                        session.loadUri("about:blank")
+                        Log.d("Surfscape", "Loaded about:blank as staging page")
+                    }
+                }, 100)
             } catch (e: Throwable) {
                 Log.w("Surfscape", "Failed to load about:blank staging page", e)
             }
@@ -286,8 +337,13 @@ class MainActivity : AppCompatActivity() {
             Log.e("Surfscape", "Failed to initialize GeckoSession", t)
             runOnUiThread {
                 Toast.makeText(this, "Failed to start browser engine: ${t.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+                // Don't finish() immediately - give user a chance to see the error
+                android.os.Handler(mainLooper).postDelayed({
+                    finish()
+                }, 3000)
             }
-            throw t
+            // Don't re-throw - let the activity handle the error gracefully
+            return
         }
     }
 
@@ -311,8 +367,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        if (this::geckoSession.isInitialized) {
-            geckoSession.close()
+        try {
+            if (this::geckoSession.isInitialized) {
+                geckoSession.close()
+            }
+        } catch (e: Exception) {
+            Log.w("Surfscape", "Error closing GeckoSession", e)
         }
         super.onDestroy()
     }
@@ -320,5 +380,14 @@ class MainActivity : AppCompatActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         Log.d("Surfscape", "Window focus changed: hasFocus=${hasFocus} sessionActive=${if (this::geckoSession.isInitialized) geckoSession.isOpen else false}")
+    }
+
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        if (this::geckoSession.isInitialized && canGoBackFlag) {
+            geckoSession.goBack()
+        } else {
+            super.onBackPressed()
+        }
     }
 }
