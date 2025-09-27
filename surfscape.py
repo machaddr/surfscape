@@ -606,62 +606,7 @@ class AdvancedSettingsDialog(QDialog):
         self.parent_browser = parent
         self.setWindowTitle("Surfscape Settings")
         self.setMinimumSize(800, 600)
-        self.resize(1000, 700)
-        
-        # Create main layout (don't set on dialog yet)
-        main_layout = QHBoxLayout()
-        
-        # Create sidebar for categories
-        self.sidebar = QListWidget()
-        self.sidebar.setMaximumWidth(200)
-        self.sidebar.setStyleSheet("""
-            QListWidget {
-                background-color: #f0f0f0;
-                border: 1px solid #ccc;
-                font-size: 12px;
-            }
-            QListWidget::item {
-                padding: 8px;
-                border-bottom: 1px solid #ddd;
-            }
-            QListWidget::item:selected {
-                background-color: #0078d4;
-                color: white;
-            }
-        """)
-    
-    def reset_to_defaults(self):
-        self._settings = self._load_default_settings()
-        self.save_settings()
-    
-    def export_settings(self, filepath):
-        try:
-            with open(filepath, 'w') as f:
-                json.dump(self._settings, f, indent=4)
-            return True
-        except Exception as e:
-            print(f"Failed to export settings: {e}")
-            return False
-    
-    def import_settings(self, filepath):
-        try:
-            with open(filepath, 'r') as f:
-                imported_settings = json.load(f)
-                self._merge_settings(imported_settings)
-                self.save_settings()
-            return True
-        except Exception as e:
-            print(f"Failed to import settings: {e}")
-            return False
-
-class AdvancedSettingsDialog(QDialog):
-    def __init__(self, settings_manager, parent=None):
-        super().__init__(parent)
-        self.settings_manager = settings_manager
-        self.parent_browser = parent
-        self.setWindowTitle("Surfscape Settings")
-        self.setMinimumSize(800, 600)
-        self.resize(1000, 700)
+        self.resize(800, 600)
         
         # Create main layout (don't set on dialog yet)
         main_layout = QHBoxLayout()
@@ -5096,12 +5041,8 @@ class Browser(QMainWindow):
 
     def show_settings_dialog(self):
         dialog = AdvancedSettingsDialog(self.settings_manager, self)
-        try:
-            # Attempt true fullscreen
-            dialog.showFullScreen()
-        except Exception:
-            # Fallback to maximized if fullscreen not supported
-            dialog.showMaximized()
+        dialog.adjustSize()
+        dialog.show()
         dialog.exec()
         
     def set_homepage(self, homepage_url):
