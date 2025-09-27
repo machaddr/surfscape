@@ -3860,6 +3860,7 @@ class Browser(QMainWindow):
         QTimer.singleShot(50, lambda: self._deferred_load_json('bookmarks'))
         QTimer.singleShot(80, lambda: self._deferred_load_json('history'))
         QTimer.singleShot(110, lambda: self._deferred_load_json('cookies'))
+        QTimer.singleShot(120, self.update_url_autocomplete)
 
         # Legacy flat settings
         self.settings = self.load_json(os.path.join(self.data_dir, 'settings.json'))
@@ -3949,13 +3950,6 @@ class Browser(QMainWindow):
         self.create_menu_bar()
         self.create_shortcuts()
 
-        # Delayed menu population (further deferred in fast start mode)
-        base_delay = 500 if self.fast_start else 200
-        QTimer.singleShot(base_delay + 0, self.update_history_menu)
-        QTimer.singleShot(base_delay + 10, self.update_bookmarks_menu)
-        QTimer.singleShot(base_delay + 30, self.update_cookies_menu)
-        QTimer.singleShot(base_delay + 50, self.update_url_autocomplete)
-
         # Deferred cookie store sync (later if fast start)
         QTimer.singleShot(900 if self.fast_start else 300, self.load_cookies_to_web_engine)
 
@@ -3968,11 +3962,11 @@ class Browser(QMainWindow):
     def _deferred_load_json(self, which:str):
         try:
             if which == 'bookmarks':
-                self.bookmarks = self.load_json(self.bookmarks_file)
+                self.bookmarks = (self.load_json(self.bookmarks_file) or [])[-500:]  # Limit to last 500
             elif which == 'history':
-                self.history = self.load_json(self.history_file)
+                self.history = (self.load_json(self.history_file) or [])[-1000:]  # Limit to last 1000
             elif which == 'cookies':
-                self.cookies = self.load_json(self.cookies_file)
+                self.cookies = (self.load_json(self.cookies_file) or [])[-500:]  # Limit to last 500
         except Exception:
             pass
 
@@ -4425,7 +4419,7 @@ class Browser(QMainWindow):
 
         # History menu (before Bookmarks)
         self.history_menu = menu_bar.addMenu("History")
-        self.update_history_menu()
+        self.history_menu.aboutToShow.connect(self.update_history_menu)
 
         # Bookmarks menu
         self.bookmarks_menu = menu_bar.addMenu("Bookmarks")
@@ -4433,14 +4427,16 @@ class Browser(QMainWindow):
         # Static actions for import/export
         self.action_import_bookmarks = QAction("Import Bookmarks...", self)
         self.action_import_bookmarks.triggered.connect(self.import_bookmarks)
+        self.bookmarks_menu.addAction(self.action_import_bookmarks)
         self.action_export_bookmarks = QAction("Export Bookmarks...", self)
         self.action_export_bookmarks.triggered.connect(self.export_bookmarks)
-        # Build initial bookmarks UI
-        self.update_bookmarks_menu()
+        self.bookmarks_menu.addAction(self.action_export_bookmarks)
+        self.bookmarks_menu.addSeparator()
+        self.bookmarks_menu.aboutToShow.connect(self._populate_bookmarks_menu)
 
         # Cookies menu
         self.cookies_menu = menu_bar.addMenu("Cookies")
-        self.update_cookies_menu()
+        self.cookies_menu.aboutToShow.connect(self.update_cookies_menu)
 
         # Downloads menu
         downloads_menu = menu_bar.addMenu("Downloads")
@@ -4584,7 +4580,7 @@ class Browser(QMainWindow):
         # Reset the bookmark button state when the URL changes
         self.url_bar.textChanged.connect(self.reset_bookmark_button)
         # Refresh menu UI
-        self.update_bookmarks_menu()
+        self._populate_bookmarks_menu()
 
     def reset_bookmark_button(self):
         url = self.url_bar.text()
@@ -4681,6 +4677,7 @@ class Browser(QMainWindow):
         url = self.url_bar.text()
         if url != "about:blank":
             self.history.append((title, url))
+            self.history = self.history[-1000:]  # Keep only the last 1000 entries
             self.update_history_menu()
             self.save_json(self.history_file, self.history)  # Save history
 
@@ -4768,8 +4765,8 @@ class Browser(QMainWindow):
         # Keep URL bar autocomplete fresh
         self.update_url_autocomplete()
 
-    def update_bookmarks_menu(self):
-        """Update the Bookmarks menu with a scrollable list of bookmarks."""
+    def _populate_bookmarks_menu(self):
+        """Populate the Bookmarks menu with a scrollable list of bookmarks."""
         # Clear and rebuild menu content
         self.bookmarks_menu.clear()
         # Static actions
@@ -4931,7 +4928,7 @@ class Browser(QMainWindow):
 
             if added:
                 self.save_json(self.bookmarks_file, self.bookmarks)
-                self.update_bookmarks_menu()
+                self._populate_bookmarks_menu()
             QMessageBox.information(self, "Import Bookmarks", f"Imported {added} new bookmark(s).")
         except Exception as e:
             QMessageBox.warning(self, "Import Bookmarks", f"Failed to import bookmarks: {e}")
@@ -5117,6 +5114,7 @@ class Browser(QMainWindow):
         else:
             # If the cookie does not exist, add it to the list
             self.cookies.append(cookie_dict)
+            self.cookies = self.cookies[-500:]  # Keep last 500
 
         self.save_json(self.cookies_file, self.cookies)
         self.update_cookies_menu()
@@ -5161,9 +5159,10 @@ class Browser(QMainWindow):
     def add_bookmark(self, title, url, bookmarks_list):
         if title and url:
             self.bookmarks.append([title, url])
+            self.bookmarks = self.bookmarks[-500:]  # Keep last 500
             self.save_json(self.bookmarks_file, self.bookmarks)
             bookmarks_list.addItem(f"{title} - {url}")
-            self.update_bookmarks_menu()
+            self._populate_bookmarks_menu()
 
     def remove_selected_bookmark(self, bookmarks_list):
         selected_items = bookmarks_list.selectedItems()
@@ -5175,7 +5174,7 @@ class Browser(QMainWindow):
             self.bookmarks = [bookmark for bookmark in self.bookmarks if bookmark[1] != url]
             bookmarks_list.takeItem(bookmarks_list.row(item))
         self.save_json(self.bookmarks_file, self.bookmarks)
-        self.update_bookmarks_menu()
+        self._populate_bookmarks_menu()
 
     def update_history_on_uncheck(self, item, history_list):
         if item.checkState() == Qt.CheckState.Unchecked:
@@ -5415,7 +5414,9 @@ class Browser(QMainWindow):
     def _optimize_web_engine_profile(self, profile):
         """Apply performance optimizations to a web engine profile"""
         # Cache optimizations
-        profile.setCachePath(os.path.expanduser("~/.cache/surfscape"))
+        cache_path = os.path.expanduser("~/.cache/surfscape")
+        os.makedirs(cache_path, exist_ok=True)
+        profile.setCachePath(cache_path)
         profile.setHttpCacheMaximumSize(100 * 1024 * 1024)  # 100MB cache
         profile.setHttpCacheType(QWebEngineProfile.HttpCacheType.DiskHttpCache)
         
