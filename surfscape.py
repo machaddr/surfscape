@@ -5653,13 +5653,15 @@ class Browser(QMainWindow):
 
     def handle_download_request(self, download_request):
         download_item = DownloadItem(download_request)
-        self.download_manager.add_download(download_item)
+        dm = self._ensure_download_manager()
+        dm.add_download(download_item)
         download_request.accept()
     
     def show_download_manager(self):
-        self.download_manager.show()
-        self.download_manager.raise_()
-        self.download_manager.activateWindow()
+        dm = self._ensure_download_manager()
+        dm.show()
+        dm.raise_()
+        dm.activateWindow()
     
     def show_find_dialog(self):
         self.find_dialog.show_and_focus()
