@@ -3738,7 +3738,8 @@ class AdBlockerWorker:
             lines = self._all_rule_lines or []
             domain_index = self._domain_index
         # Submit task (arguments must be picklable)
-        self.cpu_pool.submit(self._subset_builder_task, norm, lines, domain_index, callback=self._on_subset_ready)
+        future = self.cpu_pool.submit(self._subset_builder_task, norm, lines, domain_index)
+        future.add_done_callback(lambda f: self._on_subset_ready(f.result()))
 
     def _on_subset_ready(self, result):
         try:
@@ -3816,6 +3817,11 @@ class Browser(QMainWindow):
         self.setWindowTitle("surfscape")
         self.setMinimumSize(800, 640)
         self.cpu_pool = cpu_pool  # Multi-core pool for offloading CPU tasks
+        if not self.cpu_pool:
+            import concurrent.futures
+            # Use all available CPU cores, but limit to a reasonable maximum (e.g., 8)
+            max_workers = min(8, os.cpu_count() or 1)
+            self.cpu_pool = concurrent.futures.ProcessPoolExecutor(max_workers=max_workers)
         self.fast_adblock = True  # Enable fast domain prefilter
 
         # Set application icon if available
@@ -5818,6 +5824,10 @@ class Browser(QMainWindow):
         # Save session if enabled
         if self.settings_manager.get('restore_session', True):
             self.save_session()
+        
+        # Close multiprocessing pool
+        if self.cpu_pool:
+            self.cpu_pool.shutdown(wait=True)
         
         super().closeEvent(event)
 
