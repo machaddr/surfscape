@@ -18,8 +18,8 @@ override_dh_auto_build:
 	build-venv/bin/pip install --upgrade pip setuptools wheel
 	build-venv/bin/pip install PyInstaller
 	build-venv/bin/pip install -r requirements.txt
-	# Build static executable with PyInstaller
-	build-venv/bin/python -m PyInstaller --onefile --windowed --name surfscape surfscape.py
+	# Build static executable with PyInstaller using existing spec
+	build-venv/bin/python -m PyInstaller --noconfirm surfscape.spec
 
 override_dh_auto_install:
 	# Install the static executable
