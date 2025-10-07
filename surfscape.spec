@@ -27,6 +27,7 @@ exe = EXE(
     a.datas,
     [],
     name='surfscape',
+    icon='icon/icon.png',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
