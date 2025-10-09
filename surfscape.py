@@ -9,7 +9,7 @@ _DOMAIN_TOKEN_PATTERN = re.compile(r"\|\|([a-z0-9*_.-]+)")
 _PLAIN_DOMAIN_PATTERN = re.compile(r"([a-z0-9-]+(?:\.[a-z0-9-]+)+)")
 import argparse, concurrent.futures, threading
 from PyQt6.QtCore import QUrl, Qt , QDateTime, QThread, pyqtSignal, QObject, QStandardPaths, QTimer, QSize, QCoreApplication
-from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog, QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QCheckBox, QSpinBox, QComboBox, QSlider, QGroupBox, QGridLayout, QScrollArea, QTextEdit, QFrame, QWidget, QSplitter
+from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog, QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QCheckBox, QSpinBox, QComboBox, QSlider, QGroupBox, QGridLayout, QScrollArea, QTextEdit, QFrame, QWidget, QSplitter, QSizePolicy
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
 from PyQt6.QtGui import QIcon, QPixmap, QAction, QKeySequence, QShortcut, QColor, QFont, QStandardItemModel, QStandardItem, QImage, QImageWriter
 from PyQt6.QtWebEngineWidgets import QWebEngineView
@@ -86,9 +86,8 @@ class IOPool:
             self._executor = None
             with self._lock:
                 self._futures.clear()
-
-
-
+                
+# --- Network request interceptor with ad-blocking ------------------------------------------
 
 class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
     def __init__(self, browser, ad_blocker_rules=None, is_private=False, parent=None):
@@ -306,6 +305,8 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
             16: "Plugin Resource" # ResourceTypePluginResource
         }
         return type_map.get(resource_type, "Other")
+
+# --- Settings management --------------------------------------------------------------------
 
 class SettingsManager:
     def __init__(self, data_dir):
@@ -554,6 +555,8 @@ class SettingsManager:
         except Exception as e:
             print(f"Failed to import settings: {e}")
             return False
+
+# --- Advanced Settings Dialog -----------------------------------------------------------------
 
 class AdvancedSettingsDialog(QDialog):
     def __init__(self, settings_manager, parent=None):
@@ -1747,6 +1750,8 @@ class AdvancedSettingsDialog(QDialog):
         self.settings_manager.save_settings()
         return True
 
+# --- Download Manager Dialog -------------------------------------------------------------------
+
 class DownloadItem:
     def __init__(self, download_request):
         self.download_request = download_request
@@ -1757,6 +1762,8 @@ class DownloadItem:
         self.state = "In Progress"
         self.progress = 0
         self._progress_timer = None
+
+# --- Download Manager Dialog -------------------------------------------------------------------
 
 class DownloadManager(QDialog):
     def __init__(self, parent=None):
@@ -1959,6 +1966,8 @@ class DownloadManager(QDialog):
         formatted = f"{value:.2f}" if i > 0 else f"{int(value)}"
         return f"{formatted} {sizes[i]}"
 
+# --- Find in Page Dialog ----------------------------------------------------------------------\
+
 class FindDialog(QDialog):
     def __init__(self, browser, parent=None):
         super().__init__(parent)
@@ -2024,6 +2033,8 @@ class FindDialog(QDialog):
         self.activateWindow()
         self.search_field.setFocus()
         self.search_field.selectAll()
+        
+# --- Source View Dialog -----------------------------------------------------------------------
 
 class SourceViewDialog(QDialog):
     def __init__(self, browser, parent=None):
@@ -2170,6 +2181,8 @@ class SourceViewDialog(QDialog):
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to save file: {str(e)}")
 
+# --- Custom WebEngineView with Context Menu --------------------------------------------------
+
 class CustomWebEngineView(QWebEngineView):
     def __init__(self, browser, private_mode=False):
         super().__init__()
@@ -2230,6 +2243,8 @@ class CustomWebEngineView(QWebEngineView):
         # Show the menu
         menu.exec(event.globalPos())
 
+# --- Claude AI Integration --------------------------------------------------------------------
+
 class ClaudeAIWorker(QThread):
     response_received = pyqtSignal(str)
 
@@ -2249,7 +2264,7 @@ class ClaudeAIWorker(QThread):
 
         try:
             response = client.messages.create(
-                model="claude-3-7-sonnet-20250219",
+                model="claude-sonnet-4-5-20250929",
                 messages=[
                     {"role": "user", "content": self.user_input}
                 ],
@@ -2259,6 +2274,8 @@ class ClaudeAIWorker(QThread):
             self.response_received.emit(response.content[0].text)
         except Exception as e:
             self.response_received.emit(f"Error: {e}")
+
+# --- Claude AI Widget -------------------------------------------------------------------------
 
 class ClaudeAIWidget(QWidget):
     def closeEvent(self, event):
@@ -2288,12 +2305,9 @@ class ClaudeAIWidget(QWidget):
         self.output_window.setReadOnly(True)        
         self.layout.addWidget(self.output_window)
 
-        # Input field and send button layout
-        input_layout = QHBoxLayout()
+        # Controls row (language selector and actions)
+        controls_layout = QHBoxLayout()
 
-        self.input_field = QLineEdit(self)
-        input_layout.addWidget(self.input_field)
-        
         # Add language selector for speech recognition
         self.language_selector = QComboBox(self)
         self.language_selector.addItems([
@@ -2317,23 +2331,29 @@ class ClaudeAIWidget(QWidget):
             "Ukrainian (uk-UA)"
         ])
         self.language_selector.setToolTip("Select Speech Recognition Language")
-        self.language_selector.setMaximumWidth(120)
-        input_layout.addWidget(self.language_selector)
+        self.language_selector.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        controls_layout.addWidget(self.language_selector)
         
         # Add a microphone button to trigger voice input
         self.microphone_button = QPushButton("Mic", self)
         self.microphone_button.setToolTip("Start/Stop Voice Input")
         self.microphone_button.clicked.connect(self.toggle_voice_input)
         self.is_listening = False  # Flag to track voice input state
-        input_layout.addWidget(self.microphone_button)
+        self.microphone_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        controls_layout.addWidget(self.microphone_button)
         
         # Add a send button to send the input
+        self.layout.addLayout(controls_layout)
+
+        # Input field with inline send button for extra writing space
+        input_row = QHBoxLayout()
+        self.input_field = QLineEdit(self)
+        input_row.addWidget(self.input_field)
         self.send_button = QPushButton("Send", self)
         self.send_button.setToolTip("Send the input to Claude")
         self.send_button.clicked.connect(self.send_request)
-        input_layout.addWidget(self.send_button)
-
-        self.layout.addLayout(input_layout)
+        input_row.addWidget(self.send_button)
+        self.layout.addLayout(input_row)
         
         # Add a loading spinner while getting the response from Claude
         self.loading_spinner = QProgressBar(self)
@@ -2573,6 +2593,8 @@ class ClaudeAIWidget(QWidget):
             pool.submit(_markdown_convert_task, md_text, enable_md, callback=_apply)
         except Exception as e:
             self.output_window.append(f"<pre>Background render failed: {e}</pre>")
+
+# --- AdBlocker Worker -------------------------------------------------------------------------
 
 class AdBlockerWorker:
     def __init__(self, rules=None, pool: 'IOPool' | None = None, cache_path: str | None = None, cache_max_age: int = 86400):
@@ -3113,6 +3135,8 @@ class AdBlockerWorker:
             self._compiled_cache[key] = engine
             self._lru_touch(key)
         return engine
+
+# --- Main Browser Window ----------------------------------------------------------------------
 
 class Browser(QMainWindow):
     def __init__(self, io_pool: IOPool | None = None, fast_start: bool | None = None):
@@ -5260,6 +5284,8 @@ class Browser(QMainWindow):
         Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
         """
         QMessageBox.about(self, "About surfscape", license_text)
+
+# --- Main Application Entry Point ----------------------------------------------------------
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Surfscape Browser")
