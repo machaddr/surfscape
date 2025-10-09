@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-import os, sys, json, asyncio, aiohttp, re, pyaudio, speech_recognition as sr, anthropic, markdown, time, platform
-import argparse, concurrent.futures, multiprocessing, threading
+import os, sys, json, asyncio, aiohttp, re, pyaudio, speech_recognition as sr, anthropic, markdown, time, platform, pickle
+from urllib.parse import urlparse
+
+_DOMAIN_TOKEN_PATTERN = re.compile(r"\|\|([a-z0-9*_.-]+)")
+_PLAIN_DOMAIN_PATTERN = re.compile(r"([a-z0-9-]+(?:\.[a-z0-9-]+)+)")
+import argparse, concurrent.futures, threading
 from PyQt6.QtCore import QUrl, Qt , QDateTime, QThread, pyqtSignal, QObject, QStandardPaths, QTimer, QSize, QCoreApplication
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog, QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QCheckBox, QSpinBox, QComboBox, QSlider, QGroupBox, QGridLayout, QScrollArea, QTextEdit, QFrame, QWidget, QSplitter
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
@@ -13,7 +17,7 @@ from PyQt6.QtNetwork import QNetworkCookie, QNetworkProxy, QNetworkAccessManager
 from PyQt6.QtWebEngineCore import QWebEngineUrlRequestInterceptor, QWebEngineProfile, QWebEngineSettings
 from adblockparser import AdblockRules
 
-# --- Multi-core / CPU pool utilities ---------------------------------------------------------
+# --- Multi-core / thread pool utilities ------------------------------------------------------
 
 def _markdown_convert_task(text: str, enable_markdown: bool):
     """Isolated task function executed in a separate process for heavy markdown conversion.
@@ -33,82 +37,55 @@ def _markdown_convert_task(text: str, enable_markdown: bool):
     except Exception as e:
         return f"<pre>Markdown render error: {e}</pre>"
 
-class CPUPool:
-    """Lightweight wrapper around ProcessPoolExecutor to offload CPU-bound work.
-
-    Notes:
-      * Delays creating worker processes until first asynchronous submission.
-      * Falls back to in-process execution when workers == 1 or pool creation fails.
-      * Provides a fire-and-forget style callback marshalled onto the GUI thread when possible.
-    """
-    def __init__(self, workers: int | None):
-        if False:
-            # Avoid multiprocessing on platforms/drivers known to behave poorly with fork/spawn + QtWebEngine
-            self.workers = 1
+class IOPool:
+    """Thread-based executor for background work to keep the UI responsive."""
+    def __init__(self, workers: int | None = None):
+        if workers is None:
+            base = os.cpu_count() or 1
+            if base <= 1:
+                target = 2
+            else:
+                # Default to 2x CPU count (minimum 4 threads) to overlap IO and CPU-light work
+                target = max(4, base * 2)
         else:
-            self.workers = max(1, int(workers or 1))
-        self._executor: concurrent.futures.ProcessPoolExecutor | None = None
-
-    def _ensure_pool(self):
-        if self._executor is None and self.workers > 1:
-            try:
-                self._executor = concurrent.futures.ProcessPoolExecutor(max_workers=self.workers)
-            except Exception as e:
-                print(f"CPUPool: failed to start process pool ({e}); using in-process execution")
-                self._executor = None
+            target = max(1, int(workers))
+        # Keep the pool reasonably bounded while still leveraging multi-core systems
+        self.workers = max(2, min(64, target))
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=self.workers)
+        self._lock = threading.Lock()
+        self._futures = set()
 
     def submit(self, fn, *args, callback=None):
-        """Submit a CPU-bound function.
-        If workers == 1 (or pool creation fails) executes synchronously.
-        Returns a Future when asynchronous, otherwise None.
-        """
-        if self.workers == 1:
-            # Synchronous fast path
-            try:
-                result = fn(*args)
-            except Exception as e:
-                result = f"<pre>Worker error: {e}</pre>"
-            if callback:
-                try:
-                    from PyQt6.QtCore import QTimer
-                    QTimer.singleShot(0, lambda r=result: callback(r))
-                except Exception:
-                    callback(result)
-            return None
-
-        self._ensure_pool()
         if self._executor is None:
-            # Fallback: run inline
-            try:
-                result = fn(*args)
-            except Exception as e:
-                result = f"<pre>Worker error: {e}</pre>"
-            if callback:
-                try:
-                    from PyQt6.QtCore import QTimer
-                    QTimer.singleShot(0, lambda r=result: callback(r))
-                except Exception:
-                    callback(result)
             return None
-
-        fut = self._executor.submit(fn, *args)
-        if callback:
+        future = self._executor.submit(fn, *args)
+        if callback is not None:
             from PyQt6.QtCore import QTimer
-            def _done(f):
+            def _dispatch(fut):
                 try:
-                    res = f.result()
-                except Exception as e:
-                    res = f"<pre>Worker error: {e}</pre>"
-                QTimer.singleShot(0, lambda r=res: callback(r))
-            fut.add_done_callback(_done)
-        return fut
+                    result = fut.result()
+                except Exception as exc:
+                    result = exc
+                QTimer.singleShot(0, lambda r=result: callback(r))
+            future.add_done_callback(_dispatch)
+        with self._lock:
+            self._futures.add(future)
+        def _cleanup(fut):
+            with self._lock:
+                self._futures.discard(fut)
+        future.add_done_callback(_cleanup)
+        return future
 
-    def shutdown(self):
+    def shutdown(self, wait: bool = False):
+        executor = self._executor
+        if executor is None:
+            return
         try:
-            if self._executor:
-                self._executor.shutdown(wait=False, cancel_futures=True)
-        except Exception:
-            pass
+            executor.shutdown(wait=wait, cancel_futures=not wait)
+        finally:
+            self._executor = None
+            with self._lock:
+                self._futures.clear()
 
 
 
@@ -136,93 +113,92 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
         self._skip_types_safe = {"Image", "Font", "Media", "Favicon"}
     
     def interceptRequest(self, info):
-        # Capture network request details for DevTools
+        # Capture network request details for internal diagnostics
         self.request_count += 1
-        
-        url = info.requestUrl().toString()
-        host = info.requestUrl().host()
-        method = "GET"  # Default method, actual method detection requires more complex handling
-        request_type = self._get_request_type(info.resourceType())
-        # Build adblock context from the request/tab
-        options, first_party_host = self._build_adblock_options(info)
-        # Cache key must include contextual info (domain/type/third-party) to avoid cross-tab mismatches
-        cache_key = (
-            url,
-            options.get('domain', ''),
-            request_type,
-            1 if options.get('third-party', False) else 0,
-        )
 
-        # Heuristic: if the first-party domain was classified safe AND this is a skippable resource type
-        # then skip full rule evaluation for non-script/style resources
+        rules_provider = self.ad_blocker_rules
+        if not rules_provider:
+            return
+
+        try:
+            req_url = info.requestUrl()
+        except Exception:
+            return
+        if req_url is None:
+            return
+
+        url = req_url.toString()
+        if not url:
+            return
+        host = req_url.host()
+        request_type = self._get_request_type(info.resourceType())
+
+        options, first_party_host = self._build_adblock_options(info)
         fp = options.get('domain', '')
         third_party = options.get('third-party', False)
+
         if fp in self._safe_first_party and request_type in self._skip_types_safe:
             return
 
-        # Cached decision check
-        if cache_key in self._decision_cache:
-            if self._decision_cache[cache_key]:
+        cache_key = (
+            url,
+            fp,
+            request_type,
+            1 if third_party else 0,
+        )
+
+        decision = self._decision_cache.get(cache_key)
+        if decision is not None:
+            if decision:
                 info.block(True)
             return
 
-        # If third-party host already observed clean for passive resource types, skip expensive engine lookup
         if third_party and host in self._clean_tp_hosts and request_type in self._skip_types_safe:
             return
 
-        # Full rule evaluation (supports either a direct AdblockRules engine or an incremental provider)
         blocked = False
-        used_engine = False
-        if self.ad_blocker_rules:
-            blocked = False
-            engine = None
-            try:
-                # If provider supports per-domain engines, fetch lazily
-                if hasattr(self.ad_blocker_rules, 'get_rules_for') and callable(getattr(self.ad_blocker_rules, 'get_rules_for')):
-                    first_party_host = options.get('domain') or host
-                    engine = self.ad_blocker_rules.get_rules_for(first_party_host)
+        try:
+            if hasattr(rules_provider, 'should_block') and callable(getattr(rules_provider, 'should_block')):
+                blocked = bool(rules_provider.should_block(url, options))
+            else:
+                engine = None
+                if hasattr(rules_provider, 'get_rules_for') and callable(getattr(rules_provider, 'get_rules_for')):
+                    engine = rules_provider.get_rules_for(fp, host)
                 else:
-                    engine = self.ad_blocker_rules
+                    engine = rules_provider
                 if engine:
-                    used_engine = True
-                    blocked = engine.should_block(url, options)
+                    blocked = bool(engine.should_block(url, options))
+        except Exception:
+            blocked = False
+
+        self._decision_cache[cache_key] = blocked
+        self._decision_cache_order.append(cache_key)
+        if len(self._decision_cache_order) > self._cache_limit:
+            try:
+                old = self._decision_cache_order.popleft()
+                self._decision_cache.pop(old, None)
             except Exception:
-                blocked = False
-            # Update cache
-            self._decision_cache[cache_key] = blocked
-            self._decision_cache_order.append(cache_key)
-            if len(self._decision_cache_order) > self._cache_limit:
-                try:
-                    old = self._decision_cache_order.popleft()
-                    self._decision_cache.pop(old, None)
-                except Exception:
-                    pass
-            if blocked:
-                print(f"Adblock: blocked {url} (type: {request_type}, fp: {fp})")
-                info.block(True)
-                # Update per-domain stats
-                if fp:
-                    st = self._fp_stats.setdefault(fp, {'total':0,'blocked':0})
-                    st['total'] += 1
-                    st['blocked'] += 1
-                return
-        # Stats & heuristics updates for safe domain classification
-        if fp:
-            st = self._fp_stats.setdefault(fp, {'total':0,'blocked':0})
-            st['total'] += 1
-            if blocked:
+                pass
+
+        if blocked:
+            info.block(True)
+            if fp:
+                st = self._fp_stats.setdefault(fp, {'total': 0, 'blocked': 0})
+                st['total'] += 1
                 st['blocked'] += 1
-            # Mark domain safe if many allowed and none blocked (thresholds chosen conservatively)
-            if (st['total'] >= 25 and st['blocked'] == 0) or (st['total'] >= 60 and st['blocked'] <= 1):
-                self._safe_first_party.add(fp)
-        # Record clean third-party host for media-heavy resources if engine used and not blocked
-        if third_party and not blocked and used_engine and request_type in self._skip_types_safe:
+            return
+
+        if third_party and request_type in self._skip_types_safe:
             self._clean_tp_hosts.add(host)
             if len(self._clean_tp_hosts) > 8000:
-                # Trim arbitrarily by clearing (simple, low overhead)
                 self._clean_tp_hosts.clear()
 
-        # Continue with normal request processing
+        if fp:
+            st = self._fp_stats.setdefault(fp, {'total': 0, 'blocked': 0})
+            st['total'] += 1
+            blocked_ratio = st['blocked'] / max(1, st['total'])
+            if (st['total'] >= 40 and st['blocked'] == 0) or (st['total'] >= 80 and blocked_ratio <= 0.01):
+                self._safe_first_party.add(fp)
     
     def _prefilter_hit(self, host: str) -> bool:
         """Check if host or its registrable parent appears in the domain prefilter set.
@@ -396,7 +372,6 @@ class SettingsManager:
             'search_in_address_bar': True,
             
             # Advanced Settings
-            'enable_developer_tools': True,
             # Default to software on platforms that often crash with GPU drivers
             'enable_hardware_acceleration': True,
             'max_cache_size': 100,  # MB
@@ -432,7 +407,6 @@ class SettingsManager:
                 'history': 'Ctrl+H',
                 'downloads': 'Ctrl+J',
                 'settings': 'Ctrl+,',
-                'developer_tools': 'F12',
                 'view_source': 'Ctrl+U',
                 'fullscreen': 'F11',
                 'private_tab': 'Ctrl+Shift+N',
@@ -1071,16 +1045,6 @@ class AdvancedSettingsDialog(QDialog):
         self.cache_size_spin.setRange(10, 1000)
         self.cache_size_spin.setValue(self.settings_manager.get('max_cache_size', 100))
         group_layout.addWidget(self.cache_size_spin, 1, 1)
-        
-        layout.addWidget(group)
-        
-        # Developer
-        group = QGroupBox("Developer")
-        group_layout = QGridLayout(group)
-        
-        self.dev_tools_cb = QCheckBox("Enable developer tools")
-        self.dev_tools_cb.setChecked(self.settings_manager.get('enable_developer_tools', True))
-        group_layout.addWidget(self.dev_tools_cb, 0, 0, 1, 2)
         
         layout.addWidget(group)
         
@@ -1735,7 +1699,6 @@ class AdvancedSettingsDialog(QDialog):
         # Advanced
         self.settings_manager.set('enable_hardware_acceleration', self.hardware_accel_cb.isChecked())
         self.settings_manager.set('max_cache_size', self.cache_size_spin.value())
-        self.settings_manager.set('enable_developer_tools', self.dev_tools_cb.isChecked())
         self.settings_manager.set('enable_spell_check', self.spell_check_cb.isChecked())
         self.settings_manager.set('spell_check_language', self.spell_lang_combo.currentText())
         self.settings_manager.set('enable_accessibility', self.accessibility_cb.isChecked())
@@ -2207,777 +2170,6 @@ class SourceViewDialog(QDialog):
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Failed to save file: {str(e)}")
 
-class DevToolsDialog(QDialog):
-    def __init__(self, browser, parent=None):
-        super().__init__(parent)
-        self.browser = browser
-        self.setWindowTitle("Developer Tools")
-        self.setMinimumSize(1000, 700)
-        self.network_requests = []
-        
-        layout = QVBoxLayout(self)
-        
-        # Create main tabs
-        tabs = QTabWidget()
-        
-        # Console tab with enhanced features
-        console_widget = self.create_console_tab()
-        tabs.addTab(console_widget, "Console")
-        
-        # Elements tab with DOM tree view
-        elements_widget = self.create_elements_tab()
-        tabs.addTab(elements_widget, "Elements")
-        
-        # Network tab with detailed monitoring
-        network_widget = self.create_network_tab()
-        tabs.addTab(network_widget, "Network")
-        
-        # Sources tab with breakpoint support
-        sources_widget = self.create_sources_tab()
-        tabs.addTab(sources_widget, "Sources")
-        
-        # Application tab for storage inspection
-        application_widget = self.create_application_tab()
-        tabs.addTab(application_widget, "Application")
-        
-        # Performance tab for profiling
-        performance_widget = self.create_performance_tab()
-        tabs.addTab(performance_widget, "Performance")
-        
-        layout.addWidget(tabs)
-        
-        # Enhanced button layout
-        button_layout = QHBoxLayout()
-        
-        # Left side buttons
-        clear_console_btn = QPushButton("Clear Console")
-        clear_console_btn.clicked.connect(self.clear_console)
-        button_layout.addWidget(clear_console_btn)
-        
-        inspect_btn = QPushButton("Inspect Element")
-        inspect_btn.clicked.connect(self.inspect_element)
-        button_layout.addWidget(inspect_btn)
-        
-        view_source_btn = QPushButton("View Source")
-        view_source_btn.clicked.connect(self.open_source_viewer)
-        button_layout.addWidget(view_source_btn)
-        
-        reload_devtools_btn = QPushButton("Reload DevTools")
-        reload_devtools_btn.clicked.connect(self.reload_devtools)
-        button_layout.addWidget(reload_devtools_btn)
-        
-        button_layout.addStretch()
-        
-        # Right side buttons
-        settings_btn = QPushButton("Settings")
-        settings_btn.clicked.connect(self.open_devtools_settings)
-        button_layout.addWidget(settings_btn)
-        
-        close_btn = QPushButton("Close")
-        close_btn.clicked.connect(self.close)
-        button_layout.addWidget(close_btn)
-        
-        layout.addLayout(button_layout)
-        
-        # Initialize with basic message (don't refresh data until browser is ready)
-        self.log_to_console("Developer Tools initialized", "info")
-    
-    def create_console_tab(self):
-        console_container = QWidget()
-        layout = QVBoxLayout(console_container)
-        
-        # Console output area
-        self.console_widget = QTextEdit()
-        self.console_widget.setReadOnly(True)
-        self.console_widget.setStyleSheet("""
-            QTextEdit {
-                background-color: #1e1e1e;
-                color: #ffffff;
-                font-family: 'Courier New', monospace;
-                font-size: 12px;
-                border: 1px solid #444;
-            }
-        """)
-        layout.addWidget(self.console_widget)
-        
-        # Console input area
-        input_layout = QHBoxLayout()
-        self.console_input = QLineEdit()
-        self.console_input.setPlaceholderText("Enter JavaScript expression...")
-        self.console_input.setStyleSheet("""
-            QLineEdit {
-                background-color: #2d2d2d;
-                color: #ffffff;
-                font-family: 'Courier New', monospace;
-                border: 1px solid #444;
-                padding: 5px;
-            }
-        """)
-        self.console_input.returnPressed.connect(self.execute_console_command)
-        
-        execute_btn = QPushButton("Execute")
-        execute_btn.clicked.connect(self.execute_console_command)
-        
-        input_layout.addWidget(self.console_input)
-        input_layout.addWidget(execute_btn)
-        layout.addLayout(input_layout)
-        
-        return console_container
-    
-    def create_elements_tab(self):
-        elements_container = QWidget()
-        layout = QHBoxLayout(elements_container)
-        
-        # DOM tree view (left side)
-        self.dom_tree = QTextEdit()
-        self.dom_tree.setReadOnly(True)
-        self.dom_tree.setStyleSheet("font-family: 'Courier New', monospace; font-size: 11px;")
-        layout.addWidget(self.dom_tree, 2)
-        
-        # Properties panel (right side)
-        properties_container = QWidget()
-        properties_layout = QVBoxLayout(properties_container)
-        
-        properties_layout.addWidget(QLabel("Element Properties:"))
-        self.properties_widget = QTextEdit()
-        self.properties_widget.setReadOnly(True)
-        self.properties_widget.setMaximumWidth(300)
-        self.properties_widget.setStyleSheet("font-family: 'Courier New', monospace; font-size: 10px;")
-        properties_layout.addWidget(self.properties_widget)
-        
-        layout.addWidget(properties_container, 1)
-        
-        return elements_container
-    
-    def create_network_tab(self):
-        network_container = QWidget()
-        layout = QVBoxLayout(network_container)
-        
-        # Network controls
-        controls_layout = QHBoxLayout()
-        
-        self.record_network = QCheckBox("Record Network Activity")
-        self.record_network.setChecked(True)
-        controls_layout.addWidget(self.record_network)
-        
-        clear_network_btn = QPushButton("Clear")
-        clear_network_btn.clicked.connect(self.clear_network_log)
-        controls_layout.addWidget(clear_network_btn)
-        
-        controls_layout.addStretch()
-        layout.addLayout(controls_layout)
-        
-        # Network table
-        self.network_widget = QTableWidget(0, 6)
-        self.network_widget.setHorizontalHeaderLabels([
-            "Name", "Status", "Type", "Initiator", "Size", "Time"
-        ])
-        
-        # Set column widths
-        header = self.network_widget.horizontalHeader()
-        header.setStretchLastSection(True)
-        header.resizeSection(0, 300)  # Name
-        header.resizeSection(1, 80)   # Status
-        header.resizeSection(2, 100)  # Type
-        header.resizeSection(3, 150)  # Initiator
-        header.resizeSection(4, 80)   # Size
-        
-        layout.addWidget(self.network_widget)
-        
-        return network_container
-    
-    def create_sources_tab(self):
-        sources_container = QWidget()
-        layout = QHBoxLayout(sources_container)
-        
-        # File tree (left side)
-        file_tree_container = QWidget()
-        file_tree_layout = QVBoxLayout(file_tree_container)
-        file_tree_layout.addWidget(QLabel("Sources:"))
-        
-        self.sources_tree = QListWidget()
-        self.sources_tree.setMaximumWidth(200)
-        file_tree_layout.addWidget(self.sources_tree)
-        
-        layout.addWidget(file_tree_container)
-        
-        # Source viewer (right side)
-        source_container = QWidget()
-        source_layout = QVBoxLayout(source_container)
-        
-        self.source_viewer = QTextEdit()
-        self.source_viewer.setReadOnly(True)
-        self.source_viewer.setStyleSheet("font-family: 'Courier New', monospace; font-size: 11px;")
-        source_layout.addWidget(self.source_viewer)
-        
-        layout.addWidget(source_container, 1)
-        
-        return sources_container
-    
-    def create_application_tab(self):
-        app_container = QWidget()
-        layout = QVBoxLayout(app_container)
-        
-        # Storage inspection tabs
-        storage_tabs = QTabWidget()
-        
-        # Local Storage
-        self.localStorage_widget = QTableWidget(0, 2)
-        self.localStorage_widget.setHorizontalHeaderLabels(["Key", "Value"])
-        storage_tabs.addTab(self.localStorage_widget, "Local Storage")
-        
-        # Session Storage
-        self.sessionStorage_widget = QTableWidget(0, 2)
-        self.sessionStorage_widget.setHorizontalHeaderLabels(["Key", "Value"])
-        storage_tabs.addTab(self.sessionStorage_widget, "Session Storage")
-        
-        # Cookies
-        self.cookies_widget = QTableWidget(0, 4)
-        self.cookies_widget.setHorizontalHeaderLabels(["Name", "Value", "Domain", "Path"])
-        storage_tabs.addTab(self.cookies_widget, "Cookies")
-        
-        layout.addWidget(storage_tabs)
-        
-        return app_container
-    
-    def create_performance_tab(self):
-        perf_container = QWidget()
-        layout = QVBoxLayout(perf_container)
-        
-        # Performance controls
-        controls_layout = QHBoxLayout()
-        
-        start_recording_btn = QPushButton("Start Recording")
-        start_recording_btn.clicked.connect(self.start_performance_recording)
-        controls_layout.addWidget(start_recording_btn)
-        
-        stop_recording_btn = QPushButton("Stop Recording")
-        stop_recording_btn.clicked.connect(self.stop_performance_recording)
-        controls_layout.addWidget(stop_recording_btn)
-        
-        controls_layout.addStretch()
-        layout.addLayout(controls_layout)
-        
-        # Performance metrics
-        self.performance_widget = QTextEdit()
-        self.performance_widget.setReadOnly(True)
-        self.performance_widget.setStyleSheet("font-family: 'Courier New', monospace;")
-        layout.addWidget(self.performance_widget)
-        
-        return perf_container
-    
-    def clear_console(self):
-        self.console_widget.clear()
-        self.log_to_console("Console cleared", "info")
-    
-    def execute_console_command(self):
-        command = self.console_input.text().strip()
-        if not command:
-            return
-        
-        self.log_to_console(f"> {command}", "input")
-        
-        # Execute JavaScript in the current page
-        if not hasattr(self.browser, 'tabs') or self.browser.tabs is None:
-            self.log_to_console("Browser tabs not available yet", "error")
-            self.console_input.clear()
-            return
-            
-        current_widget = self.browser.tabs.currentWidget()
-        if current_widget:
-            current_widget.page().runJavaScript(command, self.handle_js_result)
-        else:
-            self.log_to_console("No active tab for JavaScript execution", "error")
-        
-        self.console_input.clear()
-    
-    def handle_js_result(self, result):
-        try:
-            if result is not None:
-                # Handle different result types
-                if isinstance(result, (dict, list)):
-                    import json
-                    formatted_result = json.dumps(result, indent=2)
-                    self.log_to_console(formatted_result, "output")
-                else:
-                    self.log_to_console(str(result), "output")
-            else:
-                self.log_to_console("undefined", "output")
-        except Exception as e:
-            self.log_to_console(f"Error processing result: {str(e)}", "error")
-    
-    def inspect_element(self):
-        if not hasattr(self.browser, 'tabs') or self.browser.tabs is None:
-            self.log_to_console("Browser tabs not available yet", "warning")
-            return
-            
-        current_widget = self.browser.tabs.currentWidget()
-        if current_widget:
-            current_widget.page().toHtml(self.update_elements_view)
-        else:
-            self.log_to_console("No active tab to inspect", "warning")
-    
-    def update_elements_view(self, html_content):
-        # Format HTML for better readability
-        formatted_html = self.format_html(html_content)
-        self.dom_tree.setPlainText(formatted_html)
-        
-        # Update properties panel
-        self.properties_widget.setPlainText("Select an element to view its properties")
-    
-    def format_html(self, html_content):
-        # Simple HTML formatting
-        import re
-        
-        # Add line breaks after closing tags
-        formatted = re.sub(r'>', '>\n', html_content)
-        
-        # Add indentation
-        lines = formatted.split('\n')
-        formatted_lines = []
-        indent_level = 0
-        
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-                
-            # Decrease indent for closing tags
-            if line.startswith('</'):
-                indent_level = max(0, indent_level - 1)
-            
-            formatted_lines.append('  ' * indent_level + line)
-            
-            # Increase indent for opening tags (but not self-closing)
-            if line.startswith('<') and not line.startswith('</') and not line.endswith('/>'):
-                indent_level += 1
-        
-        return '\n'.join(formatted_lines)
-    
-    def clear_network_log(self):
-        self.network_widget.setRowCount(0)
-        self.network_requests.clear()
-    
-    def add_network_request(self, url, status="Loading", request_type="Document", initiator="Unknown", size="--", time="--"):
-        if not self.record_network.isChecked():
-            return
-            
-        row = self.network_widget.rowCount()
-        self.network_widget.insertRow(row)
-        
-        self.network_widget.setItem(row, 0, QTableWidgetItem(url))
-        self.network_widget.setItem(row, 1, QTableWidgetItem(str(status)))
-        self.network_widget.setItem(row, 2, QTableWidgetItem(request_type))
-        self.network_widget.setItem(row, 3, QTableWidgetItem(initiator))
-        self.network_widget.setItem(row, 4, QTableWidgetItem(str(size)))
-        self.network_widget.setItem(row, 5, QTableWidgetItem(str(time)))
-    
-    def open_source_viewer(self):
-        try:
-            source_dialog = SourceViewDialog(self.browser, self)
-            source_dialog.show()
-            source_dialog.raise_()
-            source_dialog.activateWindow()
-            self.log_to_console("Source viewer opened", "info")
-        except Exception as e:
-            self.log_to_console(f"Failed to open source viewer: {str(e)}", "error")
-            QMessageBox.warning(self, "Error", f"Failed to open View Source: {str(e)}")
-    
-    def reload_devtools(self):
-        self.refresh_all_data()
-        self.log_to_console("Developer Tools reloaded", "info")
-    
-    def open_devtools_settings(self):
-        QMessageBox.information(self, "DevTools Settings", "DevTools settings will be integrated with main browser settings.")
-    
-    def refresh_all_data(self):
-        # Only refresh if browser tabs are available
-        if not hasattr(self.browser, 'tabs') or self.browser.tabs is None:
-            self.log_to_console("Browser not fully initialized yet", "warning")
-            return
-        
-        # Refresh elements view
-        self.inspect_element()
-        
-        # Refresh cookies
-        self.refresh_cookies()
-        
-        # Refresh storage
-        self.refresh_local_storage()
-        self.refresh_session_storage()
-        
-        # Log refresh
-        self.log_to_console("Developer Tools data refreshed", "info")
-    
-    def refresh_cookies(self):
-        if not hasattr(self.browser, 'tabs') or self.browser.tabs is None:
-            return
-            
-        current_widget = self.browser.tabs.currentWidget()
-        if not current_widget:
-            return
-            
-        # Get cookies using JavaScript with comprehensive error handling
-        js_code = """
-        (function() {
-            try {
-                // Check if we can access document.cookie
-                if (typeof document === 'undefined') {
-                    return [{name: 'Info', value: 'No document available'}];
-                }
-                
-                if (typeof document.cookie === 'undefined') {
-                    return [{name: 'Info', value: 'Cookies not supported'}];
-                }
-                
-                const cookieString = document.cookie;
-                if (!cookieString || cookieString.trim() === '') {
-                    return [{name: 'Info', value: 'No cookies found for this page'}];
-                }
-                
-                return cookieString.split(';').map(cookie => {
-                    const [name, value] = cookie.trim().split('=');
-                    return {name: name || 'unnamed', value: value || ''};
-                }).filter(cookie => cookie.name && cookie.name !== '');
-                
-            } catch (e) {
-                if (e.name === 'SecurityError') {
-                    return [{name: 'Security Error', value: 'Cookie access denied for this domain'}];
-                } else {
-                    return [{name: 'Error', value: 'Failed to read cookies: ' + e.message}];
-                }
-            }
-        })();
-        """
-        current_widget.page().runJavaScript(js_code, self.update_cookies_display)
-    
-    def refresh_local_storage(self):
-        """Refresh localStorage data from current web page"""
-        if not hasattr(self.browser, 'tabs') or self.browser.tabs is None:
-            return
-            
-        current_widget = self.browser.tabs.currentWidget()
-        if not current_widget:
-            return
-            
-        # Get localStorage using JavaScript
-        js_code = """
-        (function() {
-            try {
-                if (typeof localStorage === 'undefined') {
-                    return [{key: 'Info', value: 'localStorage not available'}];
-                }
-                
-                var items = [];
-                for (var i = 0; i < localStorage.length; i++) {
-                    var key = localStorage.key(i);
-                    var value = localStorage.getItem(key);
-                    items.push({key: key, value: value});
-                }
-                return items.length > 0 ? items : [{key: 'Info', value: 'No localStorage items found'}];
-                
-            } catch (e) {
-                return [{key: 'Error', value: 'localStorage access denied: ' + e.message}];
-            }
-        })();
-        """
-        current_widget.page().runJavaScript(js_code, self.update_local_storage_display)
-    
-    def refresh_session_storage(self):
-        """Refresh sessionStorage data from current web page"""
-        if not hasattr(self.browser, 'tabs') or self.browser.tabs is None:
-            return
-            
-        current_widget = self.browser.tabs.currentWidget()
-        if not current_widget:
-            return
-            
-        # Get sessionStorage using JavaScript
-        js_code = """
-        (function() {
-            try {
-                if (typeof sessionStorage === 'undefined') {
-                    return [{key: 'Info', value: 'sessionStorage not available'}];
-                }
-                
-                var items = [];
-                for (var i = 0; i < sessionStorage.length; i++) {
-                    var key = sessionStorage.key(i);
-                    var value = sessionStorage.getItem(key);
-                    items.push({key: key, value: value});
-                }
-                return items.length > 0 ? items : [{key: 'Info', value: 'No sessionStorage items found'}];
-                
-            } catch (e) {
-                return [{key: 'Error', value: 'sessionStorage access denied: ' + e.message}];
-            }
-        })();
-        """
-        current_widget.page().runJavaScript(js_code, self.update_session_storage_display)
-    
-    def update_local_storage_display(self, items):
-        """Update localStorage table with data from JavaScript"""
-        try:
-            if not items:
-                self.localStorage_widget.setRowCount(0)
-                return
-                
-            self.localStorage_widget.setRowCount(len(items))
-            for i, item in enumerate(items):
-                if isinstance(item, dict):
-                    key = item.get('key', '')
-                    value = item.get('value', '')
-                else:
-                    key = str(item)
-                    value = ''
-                
-                self.localStorage_widget.setItem(i, 0, QTableWidgetItem(str(key)))
-                self.localStorage_widget.setItem(i, 1, QTableWidgetItem(str(value)))
-                
-        except Exception as e:
-            self.localStorage_widget.setRowCount(1)
-            self.localStorage_widget.setItem(0, 0, QTableWidgetItem("Error"))
-            self.localStorage_widget.setItem(0, 1, QTableWidgetItem(f"Display error: {str(e)}"))
-    
-    def update_session_storage_display(self, items):
-        """Update sessionStorage table with data from JavaScript"""
-        try:
-            if not items:
-                self.sessionStorage_widget.setRowCount(0)
-                return
-                
-            self.sessionStorage_widget.setRowCount(len(items))
-            for i, item in enumerate(items):
-                if isinstance(item, dict):
-                    key = item.get('key', '')
-                    value = item.get('value', '')
-                else:
-                    key = str(item)
-                    value = ''
-                
-                self.sessionStorage_widget.setItem(i, 0, QTableWidgetItem(str(key)))
-                self.sessionStorage_widget.setItem(i, 1, QTableWidgetItem(str(value)))
-                
-        except Exception as e:
-            self.sessionStorage_widget.setRowCount(1)
-            self.sessionStorage_widget.setItem(0, 0, QTableWidgetItem("Error"))
-            self.sessionStorage_widget.setItem(0, 1, QTableWidgetItem(f"Display error: {str(e)}"))
-    
-    def update_cookies_display(self, cookies):
-        try:
-            if not cookies:
-                # Clear the table if no cookies
-                self.cookies_widget.setRowCount(0)
-                return
-                
-            # Get current domain from active tab
-            current_domain = "unknown-domain"
-            if hasattr(self.browser, 'tabs') and self.browser.tabs is not None:
-                current_widget = self.browser.tabs.currentWidget()
-                if current_widget and hasattr(current_widget, 'url'):
-                    try:
-                        url = current_widget.url()
-                        current_domain = url.host() if url.host() else "local-file"
-                    except:
-                        current_domain = "current-page"
-            
-            # Handle different cookie data structures
-            if isinstance(cookies, list):
-                self.cookies_widget.setRowCount(len(cookies))
-                for i, cookie in enumerate(cookies):
-                    if isinstance(cookie, dict):
-                        name = cookie.get('name', '')
-                        value = cookie.get('value', '')
-                    else:
-                        # Handle simple string cookies
-                        name = str(cookie)
-                        value = ''
-                    
-                    self.cookies_widget.setItem(i, 0, QTableWidgetItem(str(name)))
-                    self.cookies_widget.setItem(i, 1, QTableWidgetItem(str(value)))
-                    self.cookies_widget.setItem(i, 2, QTableWidgetItem(current_domain))
-                    self.cookies_widget.setItem(i, 3, QTableWidgetItem('/'))
-            else:
-                # Handle unexpected cookie data format
-                self.cookies_widget.setRowCount(1)
-                self.cookies_widget.setItem(0, 0, QTableWidgetItem("Error"))
-                self.cookies_widget.setItem(0, 1, QTableWidgetItem(f"Unexpected cookie format: {type(cookies)}"))
-                self.cookies_widget.setItem(0, 2, QTableWidgetItem(current_domain))
-                self.cookies_widget.setItem(0, 3, QTableWidgetItem('/'))
-                
-        except Exception as e:
-            # Handle any errors in cookie display
-            self.cookies_widget.setRowCount(1)
-            self.cookies_widget.setItem(0, 0, QTableWidgetItem("Error"))
-            self.cookies_widget.setItem(0, 1, QTableWidgetItem(f"Cookie display error: {str(e)}"))
-            self.cookies_widget.setItem(0, 2, QTableWidgetItem("error"))
-            self.cookies_widget.setItem(0, 3, QTableWidgetItem('/'))
-    
-    def start_performance_recording(self):
-        self.performance_widget.append("Performance recording started...")
-        if not hasattr(self.browser, 'tabs') or self.browser.tabs is None:
-            self.performance_widget.append("Browser tabs not available yet")
-            return
-            
-        current_widget = self.browser.tabs.currentWidget()
-        if current_widget:
-            # Start comprehensive performance monitoring
-            js_code = """
-            (function() {
-                // Start timing
-                console.time('Performance Recording');
-                window.performanceData = {
-                    startTime: performance.now(),
-                    navigationStart: performance.timing.navigationStart,
-                    loadEventEnd: performance.timing.loadEventEnd,
-                    domContentLoaded: performance.timing.domContentLoadedEventEnd,
-                    resources: []
-                };
-                
-                // Monitor resource loading
-                var observer = new PerformanceObserver(function(list) {
-                    for (var entry of list.getEntries()) {
-                        window.performanceData.resources.push({
-                            name: entry.name,
-                            type: entry.entryType,
-                            startTime: entry.startTime,
-                            duration: entry.duration,
-                            size: entry.transferSize || 0
-                        });
-                    }
-                });
-                observer.observe({entryTypes: ['resource', 'navigation', 'measure', 'mark']});
-                
-                return 'Performance monitoring started';
-            })();
-            """
-            current_widget.page().runJavaScript(js_code, 
-                lambda result: self.performance_widget.append(f"→ {result}"))
-        else:
-            self.performance_widget.append("No active tab for performance recording")
-    
-    def stop_performance_recording(self):
-        self.performance_widget.append("Performance recording stopped...")
-        if not hasattr(self.browser, 'tabs') or self.browser.tabs is None:
-            self.performance_widget.append("Browser tabs not available yet")
-            return
-            
-        current_widget = self.browser.tabs.currentWidget()
-        if current_widget:
-            # Get comprehensive performance data
-            js_code = """
-            (function() {
-                console.timeEnd('Performance Recording');
-                
-                if (window.performanceData) {
-                    var data = window.performanceData;
-                    var now = performance.now();
-                    
-                    // Calculate timing metrics
-                    var metrics = {
-                        totalTime: now - data.startTime,
-                        domContentLoaded: data.domContentLoaded - data.navigationStart,
-                        loadComplete: data.loadEventEnd - data.navigationStart,
-                        resourceCount: data.resources.length,
-                        totalResourceSize: data.resources.reduce((sum, r) => sum + r.size, 0),
-                        slowestResource: data.resources.reduce((max, r) => 
-                            r.duration > (max.duration || 0) ? r : max, {}),
-                        fastestResource: data.resources.reduce((min, r) => 
-                            r.duration < (min.duration || Infinity) ? r : min, {})
-                    };
-                    
-                    return {
-                        summary: metrics,
-                        resources: data.resources.slice(0, 10) // Top 10 resources
-                    };
-                }
-                
-                return {error: 'No performance data available'};
-            })();
-            """
-            current_widget.page().runJavaScript(js_code, self.display_performance_results)
-        else:
-            self.performance_widget.append("No active tab for performance recording")
-    
-    def display_performance_results(self, results):
-        """Display comprehensive performance results"""
-        try:
-            if not results or results.get('error'):
-                self.performance_widget.append("→ " + (results.get('error', 'No performance data')))
-                return
-            
-            summary = results.get('summary', {})
-            resources = results.get('resources', [])
-            
-            self.performance_widget.append("\n📊 Performance Summary:")
-            self.performance_widget.append(f"  Total Time: {summary.get('totalTime', 0):.2f}ms")
-            self.performance_widget.append(f"  DOM Content Loaded: {summary.get('domContentLoaded', 0):.2f}ms")
-            self.performance_widget.append(f"  Load Complete: {summary.get('loadComplete', 0):.2f}ms")
-            self.performance_widget.append(f"  Resources Loaded: {summary.get('resourceCount', 0)}")
-            self.performance_widget.append(f"  Total Resource Size: {summary.get('totalResourceSize', 0)} bytes")
-            
-            slowest = summary.get('slowestResource', {})
-            if slowest.get('name'):
-                self.performance_widget.append(f"  Slowest Resource: {slowest.get('name', 'Unknown')} ({slowest.get('duration', 0):.2f}ms)")
-            
-            if resources:
-                self.performance_widget.append("\n🔍 Top Resources:")
-                for i, resource in enumerate(resources[:5], 1):
-                    name = resource.get('name', 'Unknown')
-                    duration = resource.get('duration', 0)
-                    size = resource.get('size', 0)
-                    # Truncate long URLs
-                    if len(name) > 50:
-                        name = "..." + name[-47:]
-                    self.performance_widget.append(f"  {i}. {name} ({duration:.1f}ms, {size}B)")
-                    
-        except Exception as e:
-            self.performance_widget.append(f"→ Error displaying results: {str(e)}")
-    
-    def log_to_console(self, message, message_type="log"):
-        # Filter noisy site policy warnings
-        if isinstance(message, str) and 'Permissions-Policy' in message and 'interest-cohort' in message:
-            return
-        timestamp = QDateTime.currentDateTime().toString("hh:mm:ss.zzz")
-        
-        # Color coding based on message type
-        colors = {
-            "input": "#88C999",   # Green for input
-            "output": "#FFD700",  # Gold for output
-            "error": "#FF6B6B",   # Red for errors
-            "warning": "#FFB347", # Orange for warnings
-            "info": "#87CEEB",    # Sky blue for info
-            "log": "#FFFFFF"      # White for regular logs
-        }
-        
-        color = colors.get(message_type, "#FFFFFF")
-        formatted_message = f'<span style="color: #888;">[{timestamp}]</span> <span style="color: {color};">{message}</span>'
-        
-        self.console_widget.append(formatted_message)
-    
-    def log_js_console_message(self, level, message, line, source):
-        """Log JavaScript console messages from web pages"""
-        try:
-            # Map Qt console message levels to our message types
-            level_map = {
-                0: "log",      # InfoMessageLevel
-                1: "warning",  # WarningMessageLevel  
-                2: "error"     # CriticalMessageLevel
-            }
-            
-            message_type = level_map.get(level, "log")
-            
-            # Format the console message
-            if source and line > 0:
-                formatted_msg = f"[JS] {message} (at {source}:{line})"
-            else:
-                formatted_msg = f"[JS] {message}"
-            
-            self.log_to_console(formatted_msg, message_type)
-            
-        except Exception as e:
-            self.log_to_console(f"Error logging JS console message: {str(e)}", "error")
-
 class CustomWebEngineView(QWebEngineView):
     def __init__(self, browser, private_mode=False):
         super().__init__()
@@ -3028,12 +2220,6 @@ class CustomWebEngineView(QWebEngineView):
         
         print_action = menu.addAction("Print...")
         print_action.triggered.connect(self.browser.print_page)
-        
-        menu.addSeparator()
-        
-        # Developer tools
-        inspect_action = menu.addAction("Inspect Element")
-        inspect_action.triggered.connect(self.browser.show_developer_tools)
         
         menu.addSeparator()
         
@@ -3309,8 +2495,8 @@ class ClaudeAIWidget(QWidget):
         Convert markdown text to HTML using a markdown transpiler.
         Uses the markdown library if available, otherwise falls back to basic formatter.
         """
-        # Heuristic: offload large markdown blocks to background process pool
-        if getattr(self, 'cpu_pool', None) and text and len(text) > 4000:
+        # Heuristic: offload large markdown blocks to background worker pool
+        if getattr(self, 'background_pool', None) and text and len(text) > 4000:
             self._offload_markdown(text)
             return "<i>Rendering large markdown in background...</i>"
 
@@ -3374,7 +2560,8 @@ class ClaudeAIWidget(QWidget):
             f"<span style='color: blue; font-weight: bold;'>Assistant:</span> {formatted_response}<br>"
         )
     def _offload_markdown(self, md_text: str):
-        if not getattr(self, 'cpu_pool', None):
+        pool = getattr(self, 'background_pool', None)
+        if not pool:
             return
         enable_md = bool(getattr(self, 'markdown_module', None))
         def _apply(html):
@@ -3383,43 +2570,42 @@ class ClaudeAIWidget(QWidget):
             except Exception:
                 pass
         try:
-            self.cpu_pool.submit(_markdown_convert_task, md_text, enable_md, callback=_apply)
+            pool.submit(_markdown_convert_task, md_text, enable_md, callback=_apply)
         except Exception as e:
             self.output_window.append(f"<pre>Background render failed: {e}</pre>")
 
 class AdBlockerWorker:
-    def __init__(self, rules=None, cpu_pool: 'CPUPool' | None = None, cache_path: str | None = None, cache_max_age: int = 86400):
+    def __init__(self, rules=None, pool: 'IOPool' | None = None, cache_path: str | None = None, cache_max_age: int = 86400):
         self.rules = rules  # Monolithic engine (legacy)
         # Incremental mode attributes
         self._all_rule_lines: list[str] | None = None
         self._domain_index: dict[str, list[int]] = {}
-        self._compiled_cache: dict[str, AdblockRules] = {}
-        self._compiled_cache_order: list[str] = []
-        self._compiled_cache_limit = 64  # distinct first-party domains
+        self._compiled_cache: dict[tuple[str, ...], AdblockRules] = {}
+        self._compiled_cache_order: list[tuple[str, ...]] = []
+        self._compiled_cache_limit = 128  # cached subset variants
         self._lock = threading.RLock()
         self.incremental_enabled = False  # Use monolithic engine for simplicity
-        self._building: set[str] = set()  # domains currently being built asynchronously
-        self.cpu_pool = cpu_pool
+        self._building: set[tuple[str, ...]] = set()  # domains currently being built asynchronously
+        self.pool = pool
         self.cache_path = cache_path
         self.cache_max_age = cache_max_age
         self.generic_engine: AdblockRules | None = None  # quick generic engine for early blocking
         self.blocked_domains: set[str] = set()  # Fast prefilter set of domains to block
+        self.domain_block_set: set[str] = set()
+        self._generic_subset_lines: list[str] = []
+        self._full_rules_future = None
+        self._full_rules_timer: threading.Timer | None = None
 
     async def download_adblock_lists(self):
-        """Download EasyList + EasyPrivacy. Build either monolithic or incremental structures.
-
-        Strategy:
-          1. Download full lists (still required to allow per-page extraction)
-          2. Keep raw lines in memory (string list)
-          3. Build a light domain keyword index: map domain tokens (example.com) to line indexes
-             Heuristic extraction: for lines containing '||example.com^' or '/example.com/' typical in EasyList.
-          4. On-demand (get_rules_for), compile a small subset of rules relevant to the first-party domain:
-               - All exception rules (@@) referencing the domain
-               - All blocking rules referencing the domain
-               - A minimum fallback set (generic rules limited to 300 lines) to still catch generic ads
-          5. Cache compiled subsets (LRU) to keep memory/time balanced.
-        """
+        """Download EasyList + EasyPrivacy and prepare incremental-friendly structures."""
         lines: list[str] = []
+        self.incremental_enabled = False
+        self.rules = None
+        self.generic_engine = None
+        self._all_rule_lines = []
+        self._domain_index.clear()
+        self.blocked_domains.clear()
+        self.domain_block_set.clear()
         # 1. Try cache
         if self.cache_path and os.path.exists(self.cache_path):
             try:
@@ -3427,7 +2613,6 @@ class AdBlockerWorker:
                 if (time.time() - mtime) < self.cache_max_age:
                     with open(self.cache_path, 'r', encoding='utf-8', errors='ignore') as f:
                         lines = f.read().splitlines()
-                    # print only minimal log to avoid slowing startup
                     print(f"Adblock: loaded cached lists ({len(lines)} lines)")
             except Exception as e:
                 print(f"Adblock cache read failed: {e}")
@@ -3460,19 +2645,329 @@ class AdBlockerWorker:
                 except Exception as e:
                     print(f"Adblock cache write failed: {e}")
         if not lines:
-            self.rules = None
             return
-        # Build monolithic engine for simplicity
+
+        signature = self._compute_signature(lines)
+        index_path = f"{self.cache_path}.index" if self.cache_path else None
+        snapshot = None
+        if index_path:
+            snapshot = self._load_incremental_snapshot(index_path, signature)
+            if snapshot:
+                try:
+                    self._apply_incremental_snapshot(
+                        lines,
+                        snapshot.get('domain_index', {}),
+                        snapshot.get('blocked', []),
+                        snapshot.get('generic_subset', []),
+                        clone=False,
+                    )
+                    print(f"Adblock: restored incremental index ({len(self._domain_index)} domains) from cache")
+                except Exception as e:
+                    print(f"Adblock index restore failed: {e}")
+                    snapshot = None
+
+        if snapshot is None:
+            snapshot = self._prepare_incremental_structures(lines)
+            mode = "on" if self.incremental_enabled else "off"
+            print(f"Adblock: prepared {len(lines)} source rules (incremental={mode})")
+            if index_path:
+                self._store_incremental_snapshot(index_path, signature, snapshot)
+
+        if not self.incremental_enabled:
+            self._ensure_full_rules_async(delay=0.0)
+
+    def _prepare_incremental_structures(self, lines: list[str]):
+        """Build domain index and generic subsets for incremental ad blocking."""
+        domain_index: dict[str, list[int]] = {}
+        blocked: set[str] = set()
+        generic_subset: list[str] = []
+
+        def _normalize_token(token: str) -> str:
+            token = token.strip().lower()
+            if not token:
+                return ""
+            # Strip common rule prefixes/suffixes without losing core domain portion
+            token = token.strip('|')
+            token = token.replace('*', '')
+            token = token.split('^', 1)[0]
+            token = token.split('/', 1)[0]
+            token = token.split('?', 1)[0]
+            token = token.strip('.')
+            if token.startswith('.'):
+                token = token[1:]
+            if not token or '.' not in token:
+                return ""
+            if re.search(r"[^a-z0-9.-]", token):
+                return ""
+            return token
+
+        def _record(token: str, idx: int, is_exception: bool):
+            if not token:
+                return
+            parts = token.split('.')
+            keys = {token}
+            if len(parts) >= 2:
+                keys.add('.'.join(parts[-2:]))
+            for key in keys:
+                bucket = domain_index.setdefault(key, [])
+                if len(bucket) < 160:
+                    bucket.append(idx)
+            if not is_exception:
+                blocked.add(token)
+                if len(parts) >= 2:
+                    blocked.add('.'.join(parts[-2:]))
+
+        for idx, raw in enumerate(lines):
+            line = raw.strip()
+            if not line or line.startswith('!'):
+                continue
+            is_exception = line.startswith('@@')
+            tokens = set()
+            for match in _DOMAIN_TOKEN_PATTERN.finditer(line):
+                tokens.add(match.group(1))
+            if '||' not in line or not tokens:
+                for match in _PLAIN_DOMAIN_PATTERN.finditer(line):
+                    tokens.add(match.group(1))
+            for token in tokens:
+                _record(_normalize_token(token), idx, is_exception)
+            if not is_exception and '##' not in line and '#@#' not in line and '||' not in line:
+                if len(generic_subset) < 400:
+                    generic_subset.append(line)
+
+        snapshot = {
+            'domain_index': {k: list(v) for k, v in domain_index.items()},
+            'blocked': list(blocked),
+            'generic_subset': list(generic_subset),
+        }
+        self._apply_incremental_snapshot(
+            lines,
+            domain_index,
+            blocked,
+            generic_subset,
+            clone=False,
+        )
+        return snapshot
+
+    def _apply_incremental_snapshot(self, lines, domain_index, blocked, generic_subset, clone: bool):
+        if clone:
+            domain_index_local = {str(k): list(v) for k, v in (domain_index or {}).items()}
+        else:
+            domain_index_local = domain_index or {}
+        blocked_set = set(blocked or [])
+        generic_list = list(generic_subset or [])
+
+        self._all_rule_lines = list(lines)
+        self._domain_index = domain_index_local
+        self.blocked_domains = blocked_set
+        self.domain_block_set = set(blocked_set)
+        self._compiled_cache.clear()
+        self._compiled_cache_order.clear()
+        self._building.clear()
+        self._generic_subset_lines = generic_list
+        with self._lock:
+            self.rules = None
+        if self._full_rules_timer and self._full_rules_timer.is_alive():
+            try:
+                self._full_rules_timer.cancel()
+            except Exception:
+                pass
+        self._full_rules_timer = None
+        self._full_rules_future = None
+
+        if generic_list:
+            try:
+                self.generic_engine = AdblockRules(generic_list, supported_options=[
+                    'domain','third-party','image','script','stylesheet','xmlhttprequest','subdocument','document','media','font','object','ping','other'
+                ])
+            except Exception:
+                self.generic_engine = None
+        else:
+            self.generic_engine = None
+
+        self.incremental_enabled = bool(self._domain_index) and self.pool is not None
+
+    def _compute_signature(self, lines: list[str]):
+        if not lines:
+            return (0, 0, 0)
+        head = tuple(lines[:16])
+        tail = tuple(lines[-16:]) if len(lines) >= 16 else tuple(lines)
+        return (len(lines), hash(head), hash(tail))
+
+    def _load_incremental_snapshot(self, index_path: str, signature):
+        if not index_path or not os.path.exists(index_path):
+            return None
         try:
-            self.rules = AdblockRules(lines, supported_options=[
+            with open(index_path, 'rb') as handle:
+                payload = pickle.load(handle)
+            if payload.get('signature') != signature:
+                return None
+            return payload.get('snapshot')
+        except Exception as e:
+            print(f"Adblock index load failed: {e}")
+            return None
+
+    def _store_incremental_snapshot(self, index_path: str, signature, snapshot: dict):
+        if not index_path or not snapshot:
+            return
+        directory = os.path.dirname(index_path)
+        if directory:
+            try:
+                os.makedirs(directory, exist_ok=True)
+            except Exception:
+                pass
+        try:
+            payload = {'signature': signature, 'snapshot': snapshot}
+            with open(index_path, 'wb') as handle:
+                pickle.dump(payload, handle, protocol=pickle.HIGHEST_PROTOCOL)
+        except Exception as e:
+            print(f"Adblock index save failed: {e}")
+
+    def _build_full_rules(self):
+        lines = self._all_rule_lines or []
+        if not lines:
+            return None
+        try:
+            return AdblockRules(lines, supported_options=[
                 'domain','third-party','image','script','stylesheet','xmlhttprequest','subdocument','document','media','font','object','ping','other'
             ])
-            print(f"Adblock: loaded {len(lines)} rules")
         except Exception as e:
-            print(f"Adblock rules build failed: {e}")
-            self.rules = None
+            print(f"Adblock full-rule build failed: {e}")
+            return None
 
-    def _lru_touch(self, key: str):
+    def _set_full_rules(self, rules):
+        if rules:
+            with self._lock:
+                self.rules = rules
+            try:
+                total = len(getattr(rules, 'rules', []))
+                print(f"Adblock: full fallback rules ready ({total} entries)")
+            except Exception:
+                print("Adblock: full fallback rules ready")
+        self._full_rules_future = None
+
+    def _on_full_rules_future_done(self, future):
+        try:
+            rules = future.result()
+        except Exception as e:
+            print(f"Adblock fallback future error: {e}")
+            rules = None
+        self._set_full_rules(rules)
+
+    def _ensure_full_rules_async(self, delay: float = 0.0):
+        if self.rules or not self._all_rule_lines:
+            return
+
+        def _start():
+            self._full_rules_timer = None
+            if self.rules or not self._all_rule_lines:
+                return
+            if self._full_rules_future is not None:
+                return
+            if self.pool:
+                future = self.pool.submit(self._build_full_rules)
+                self._full_rules_future = future
+                future.add_done_callback(self._on_full_rules_future_done)
+            else:
+                sentinel = object()
+                self._full_rules_future = sentinel
+                def runner():
+                    rules = self._build_full_rules()
+                    self._set_full_rules(rules)
+                threading.Thread(target=runner, daemon=True).start()
+
+        if delay <= 0:
+            if self._full_rules_timer and self._full_rules_timer.is_alive():
+                try:
+                    self._full_rules_timer.cancel()
+                except Exception:
+                    pass
+                self._full_rules_timer = None
+            _start()
+            return
+
+        if self._full_rules_future is not None or self.rules:
+            return
+        if self._full_rules_timer and self._full_rules_timer.is_alive():
+            return
+        timer = threading.Timer(delay, _start)
+        timer.daemon = True
+        self._full_rules_timer = timer
+        timer.start()
+
+    def _tokenize_host(self, host: str | None) -> set[str]:
+        if not host:
+            return set()
+        host_norm = host.lower().strip()
+        if not host_norm:
+            return set()
+        if host_norm.startswith('www.'):
+            host_norm = host_norm[4:]
+        host_norm = host_norm.strip('.')
+        if not host_norm:
+            return set()
+        parts = [p for p in host_norm.split('.') if p]
+        tokens: set[str] = set()
+        for i in range(len(parts)):
+            suffix = '.'.join(parts[i:])
+            if suffix.count('.') >= 1:
+                tokens.add(suffix)
+        return tokens
+
+    def _domain_might_match(self, host: str | None) -> bool:
+        if not host:
+            return False
+        tokens = self._tokenize_host(host)
+        for token in tokens:
+            if token in self.blocked_domains:
+                return True
+        return False
+
+    def likely_blocks_host(self, host: str) -> bool:
+        return self._domain_might_match(host)
+
+    def should_block(self, url: str, options: dict | None) -> bool:
+        opts = options or {}
+        first_party = ""
+        request_host = ""
+        try:
+            first_party = str(opts.get('domain', '') or "").lower()
+        except Exception:
+            first_party = ""
+        try:
+            request_host = (urlparse(url).hostname or "").lower()
+        except Exception:
+            request_host = ""
+
+        blocked = False
+        subset_engine = None
+        fallback_needed = False
+
+        if self.incremental_enabled:
+            subset_engine = self.get_rules_for(first_party, request_host)
+            if subset_engine:
+                try:
+                    blocked = bool(subset_engine.should_block(url, opts))
+                except Exception as e:
+                    print(f"Adblock subset error: {e}")
+                    blocked = False
+                fallback_needed = (subset_engine is None) or (subset_engine is self.generic_engine)
+            else:
+                fallback_needed = True
+        else:
+            fallback_needed = True
+
+        if fallback_needed and not blocked:
+            self._ensure_full_rules_async()
+            if self.rules and self.rules is not subset_engine:
+                try:
+                    blocked = bool(self.rules.should_block(url, opts))
+                except Exception as e:
+                    print(f"Adblock should_block error: {e}")
+                    blocked = False
+
+        return blocked
+
+    def _lru_touch(self, key):
         try:
             if key in self._compiled_cache_order:
                 self._compiled_cache_order.remove(key)
@@ -3484,137 +2979,150 @@ class AdBlockerWorker:
         except Exception:
             pass
 
-    def _select_subset_lines(self, host: str):
-        """Pure function logic to select candidate rule lines for a host.
-        Executed either in-process or inside a worker process (must not close over Qt objects)."""
-        if not host:
+    def _select_subset_lines(self, tokens: set[str]):
+        """Return rule lines relevant to the provided token set."""
+        if not tokens:
             return []
-        host_norm = host.lower()
-        if host_norm.startswith('www.'):
-            host_norm = host_norm[4:]
         lines = self._all_rule_lines or []
         domain_index = self._domain_index
-        line_indexes = set()
-        parts = host_norm.split('.') if host_norm else []
-        for i in range(max(0, len(parts)-2), len(parts)):
-            token = '.'.join(parts[i:])
-            if token in domain_index:
-                for idx in domain_index[token]:
-                    line_indexes.add(idx)
-        # Exceptions
-        if lines and host_norm:
-            exc_pattern = re.compile(r"@@.*" + re.escape(host_norm))
-            for idx, line in enumerate(lines):
-                if '@@' in line and exc_pattern.search(line):
-                    line_indexes.add(idx)
-        # Generic subset
-        generic_subset = []
-        for line in lines:
-            if len(generic_subset) >= 250:
+        line_indexes: set[int] = set()
+        for token in tokens:
+            bucket = domain_index.get(token)
+            if not bucket:
+                continue
+            for idx in bucket:
+                line_indexes.add(idx)
+                if len(line_indexes) >= 1200:
+                    break
+            if len(line_indexes) >= 1200:
                 break
-            if not line or line.startswith('!'):
-                continue
-            if '##' in line or '#@#' in line:
-                continue
-            if '||' not in line:
-                generic_subset.append(line)
-        if not line_indexes and not generic_subset:
+        if not line_indexes:
             return []
-        return [lines[i] for i in sorted(line_indexes)] + generic_subset
+        subset = [lines[i] for i in sorted(line_indexes)]
+        if self._generic_subset_lines:
+            subset.extend(self._generic_subset_lines[:200])
+        return subset
 
     @staticmethod
-    def _subset_builder_task(host: str, lines: list[str], domain_index: dict[str, list[int]]):
-        # Re-implement small selection logic in worker process (no regex exceptions scan for perf)
-        host_norm = host.lower()
-        if host_norm.startswith('www.'):
-            host_norm = host_norm[4:]
-        line_indexes = set()
-        parts = host_norm.split('.') if host_norm else []
-        for i in range(max(0, len(parts)-2), len(parts)):
-            token = '.'.join(parts[i:])
+    def _subset_builder_task(token_key: tuple[str, ...], lines: list[str], domain_index: dict[str, list[int]], generic_subset: list[str] | None):
+        tokens = set(token_key)
+        line_indexes: set[int] = set()
+        for token in tokens:
             bucket = domain_index.get(token)
-            if bucket:
-                for idx in bucket:
-                    line_indexes.add(idx)
-        # Quick exception scan (cheap contains + startswith)
-        generic_subset = []
-        exc_prefix = '@@'
-        for idx, line in enumerate(lines):
-            if not line or line.startswith('!'):
+            if not bucket:
                 continue
-            if line.startswith(exc_prefix) and host_norm in line:
+            for idx in bucket:
                 line_indexes.add(idx)
-            if '##' in line or '#@#' in line:
-                continue
-            if len(generic_subset) < 250 and '||' not in line:
-                generic_subset.append(line)
-            if len(generic_subset) >= 250 and idx > 5000:  # early stop heuristic
+                if len(line_indexes) >= 1200:
+                    break
+            if len(line_indexes) >= 1200:
                 break
-        if not line_indexes and not generic_subset:
-            return host, []
-        selected = [lines[i] for i in sorted(line_indexes)] + generic_subset
-        return host, selected
+        if not line_indexes:
+            subset = []
+        else:
+            subset = [lines[i] for i in sorted(line_indexes)]
+        if generic_subset:
+            subset.extend(generic_subset[:200])
+        return token_key, subset
 
     def prefetch_domain(self, host: str):
-        """Asynchronously build and cache rules for a domain using the CPU pool.
+        """Asynchronously build and cache rules for a domain using the background pool.
         Safe to call multiple times; only the first will enqueue work.
         """
-        if not self.incremental_enabled or not self.cpu_pool or not host:
+        if not self.incremental_enabled or not self.pool or not host:
             return
-        norm = host.lower()
-        if norm.startswith('www.'):
-            norm = norm[4:]
+        tokens = self._tokenize_host(host)
+        if not tokens:
+            return
+        key = tuple(sorted(tokens))
         with self._lock:
-            if norm in self._compiled_cache or norm in self._building:
+            if key in self._compiled_cache or key in self._building:
                 return
-            self._building.add(norm)
+            self._building.add(key)
             lines = self._all_rule_lines or []
             domain_index = self._domain_index
         # Submit task (arguments must be picklable)
-        future = self.cpu_pool.submit(self._subset_builder_task, norm, lines, domain_index)
+        generic_subset = self._generic_subset_lines
+        future = self.pool.submit(self._subset_builder_task, key, lines, domain_index, generic_subset)
         future.add_done_callback(lambda f: self._on_subset_ready(f.result()))
 
     def _on_subset_ready(self, result):
         try:
-            host, selected = result if isinstance(result, tuple) else (None, [])
-            if not host or not selected:
+            bundle = result if isinstance(result, tuple) else (None, [])
+            if len(bundle) != 2:
+                key = None
+                selected = []
+            else:
+                key, selected = bundle
+            if not key or not selected:
                 with self._lock:
-                    if host in self._building:
-                        self._building.remove(host)
+                    if key in self._building:
+                        self._building.remove(key)
                 return
             try:
                 engine = AdblockRules(selected, supported_options=[
                     'domain','third-party','image','script','stylesheet','xmlhttprequest','subdocument','document','media','font','object','ping','other'
                 ])
             except Exception as e:
-                print(f"Adblock async subset build failed for {host}: {e}")
+                print(f"Adblock async subset build failed for {key}: {e}")
                 with self._lock:
-                    if host in self._building:
-                        self._building.remove(host)
+                    if key in self._building:
+                        self._building.remove(key)
                 return
             with self._lock:
-                self._compiled_cache[host] = engine
-                self._lru_touch(host)
-                if host in self._building:
-                    self._building.remove(host)
+                self._compiled_cache[key] = engine
+                self._lru_touch(key)
+                if key in self._building:
+                    self._building.remove(key)
         except Exception as e:
             print(f"Adblock subset callback error: {e}")
 
-    def get_rules_for(self, first_party_domain: str):
-        """Return the monolithic AdblockRules engine."""
-        return self.rules
+    def get_rules_for(self, first_party_domain: str | None, request_host: str | None):
+        """Return a compiled rules engine for the combination of first-party and request host."""
+        if not self.incremental_enabled:
+            if not self.rules:
+                self._ensure_full_rules_async()
+            return self.rules or self.generic_engine
+
+        token_set = self._tokenize_host(first_party_domain)
+        token_set.update(self._tokenize_host(request_host))
+        if not token_set:
+            return self.rules or self.generic_engine
+
+        key = tuple(sorted(token_set))
+        with self._lock:
+            engine = self._compiled_cache.get(key)
+            if engine:
+                self._lru_touch(key)
+                return engine
+
+        selected = self._select_subset_lines(token_set)
+        if not selected and self.generic_engine:
+            return self.generic_engine
+        if not selected:
+            return self.rules
+        try:
+            engine = AdblockRules(selected, supported_options=[
+                'domain','third-party','image','script','stylesheet','xmlhttprequest','subdocument','document','media','font','object','ping','other'
+            ])
+        except Exception as e:
+            print(f"Adblock subset compile failed for {key}: {e}")
+            return self.generic_engine or self.rules
+
+        with self._lock:
+            self._compiled_cache[key] = engine
+            self._lru_touch(key)
+        return engine
 
 class Browser(QMainWindow):
-    def __init__(self, cpu_pool=None, fast_start: bool | None = None):
+    def __init__(self, io_pool: IOPool | None = None, fast_start: bool | None = None):
         super().__init__()
         self.setWindowTitle("surfscape")
         self.setMinimumSize(800, 640)
-        self.cpu_pool = cpu_pool  # Multi-core pool for offloading CPU tasks
-        if not self.cpu_pool:
-            import concurrent.futures
-            # Use all available CPU cores, but limit to a reasonable maximum (e.g., 8)
-            max_workers = min(8, os.cpu_count() or 1)
-            self.cpu_pool = concurrent.futures.ProcessPoolExecutor(max_workers=max_workers)
+        self.background_pool = io_pool if io_pool is not None else IOPool()
+        self._io_write_lock = threading.Lock()
+        # Reuse the same pool for assorted IO and CPU-light background tasks
+        self.io_pool = self.background_pool
 
         # Set application icon if available
         try:
@@ -3687,7 +3195,6 @@ class Browser(QMainWindow):
         # Lazy heavy components
         self.download_manager = None
         self.find_dialog = None
-        self.dev_tools = None
 
         # Profiles & interceptors
         self.network_interceptor = NetworkRequestInterceptor(self, self.ad_blocker_rules, is_private=False)
@@ -3718,7 +3225,7 @@ class Browser(QMainWindow):
         # Kick off adblock init (deferred if fast start to unblock UI sooner)
         cache_path = os.path.join(self.data_dir, 'adblock_lists.cache')
         cache_exists = os.path.exists(cache_path)
-        adblock_delay = 1200 if self.fast_start and not cache_exists else 0
+        adblock_delay = 700 if self.fast_start and not cache_exists else 0
         QTimer.singleShot(adblock_delay, self._init_adblock_legacy)
 
         # Tabs
@@ -3735,23 +3242,19 @@ class Browser(QMainWindow):
         self.setCentralWidget(self.tabs)
 
         # Session restore / first tab (blank quick tab if fast start enabled)
-        if self.fast_start:
-            if self.settings_manager.get('restore_session', True):
-                QTimer.singleShot(500, self.restore_session)
-            else:
-                QTimer.singleShot(400, lambda: self.add_new_tab(QUrl(self.homepage_url), "Homepage"))
+        restore_delay = 160 if self.fast_start else 120
+        homepage_delay = 90 if self.fast_start else 60
+        if self.settings_manager.get('restore_session', True):
+            QTimer.singleShot(restore_delay, self.restore_session)
         else:
-            if self.settings_manager.get('restore_session', True):
-                QTimer.singleShot(200, self.restore_session)
-            else:
-                QTimer.singleShot(150, lambda: self.add_new_tab(QUrl(self.homepage_url), "Homepage"))
+            QTimer.singleShot(homepage_delay, lambda: self.add_new_tab(QUrl(self.homepage_url), "Homepage"))
 
         # Menus / shortcuts
         self.create_menu_bar()
         self.create_shortcuts()
 
         # Deferred cookie store sync (later if fast start)
-        QTimer.singleShot(900 if self.fast_start else 300, self.load_cookies_to_web_engine)
+        QTimer.singleShot(400 if self.fast_start else 250, self.load_cookies_to_web_engine)
 
         # Apply settings (deferred)
         self.load_settings()
@@ -3759,16 +3262,35 @@ class Browser(QMainWindow):
 
         # DevTools loads lazily on first open
 
-    def _deferred_load_json(self, which:str):
+    def _deferred_load_json(self, which: str):
+        file_map = {
+            'bookmarks': (self.bookmarks_file, 500, 'bookmarks'),
+            'history': (self.history_file, 1000, 'history'),
+            'cookies': (self.cookies_file, 500, 'cookies'),
+        }
+        target = file_map.get(which)
+        if not target:
+            return
+        path_value, limit, attr = target
+
         try:
-            if which == 'bookmarks':
-                self.bookmarks = (self.load_json(self.bookmarks_file) or [])[-500:]  # Limit to last 500
-            elif which == 'history':
-                self.history = (self.load_json(self.history_file) or [])[-1000:]  # Limit to last 1000
-            elif which == 'cookies':
-                self.cookies = (self.load_json(self.cookies_file) or [])[-500:]  # Limit to last 500
-        except Exception:
-            pass
+            result = self.load_json(path_value)
+        except Exception as exc:
+            print(f'Failed to load {attr}: {exc}')
+            return
+        data = (result or [])[-limit:]
+        setattr(self, attr, data)
+        if attr == 'bookmarks' and hasattr(self, 'bookmarks_menu'):
+            self._populate_bookmarks_menu()
+        if attr == 'history' and hasattr(self, 'history_menu'):
+            self.update_history_menu()
+        if attr == 'cookies' and hasattr(self, 'update_cookies_menu'):
+            try:
+                self.update_cookies_menu()
+            except Exception as exc:
+                print(f"Failed to refresh cookies menu: {exc}")
+        if attr in ('bookmarks', 'history'):
+            self.update_url_autocomplete()
 
     def _ensure_download_manager(self):
         if self.download_manager is None:
@@ -3781,22 +3303,57 @@ class Browser(QMainWindow):
             self.find_dialog = FindDialog(self, self)
         return self.find_dialog
 
-    def _ensure_dev_tools(self):
-        if self.dev_tools is None:
-            self.dev_tools = DevToolsDialog(self, self)
-        return self.dev_tools
-
     def load_json(self, file_path):
         """Load data from a JSON file, or return an empty list if the file doesn't exist."""
-        if os.path.exists(file_path):
-            with open(file_path, 'r') as f:
+        if not os.path.exists(file_path):
+            return []
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        return []
+        except Exception as exc:
+            print(f"Warning: failed to load JSON data from {file_path}: {exc}")
+            return []
 
     def save_json(self, file_path, data):
-        """Save data to a JSON file."""
-        with open(file_path, 'w') as f:
-            json.dump(data, f, indent=4)
+        """Persist JSON data without blocking the UI thread."""
+        try:
+            payload = json.dumps(data, indent=4)
+        except Exception as exc:
+            print(f'Failed to serialize {file_path}: {exc}')
+            return
+
+        def _write(target_path, text):
+            directory = os.path.dirname(target_path)
+            if directory:
+                try:
+                    os.makedirs(directory, exist_ok=True)
+                except Exception as exc:
+                    print(f"Failed to ensure directory for {target_path}: {exc}")
+                    return
+            tmp_path = f"{target_path}.tmp"
+            try:
+                with self._io_write_lock:
+                    with open(tmp_path, 'w', encoding='utf-8') as handle:
+                        handle.write(text)
+                        handle.flush()
+                        try:
+                            os.fsync(handle.fileno())
+                        except Exception:
+                            pass
+                    os.replace(tmp_path, target_path)
+            except Exception as exc:
+                print(f"Failed to persist JSON to {target_path}: {exc}")
+                try:
+                    if os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+                except Exception:
+                    pass
+
+        pool = getattr(self, 'io_pool', None)
+        if pool is not None:
+            pool.submit(_write, file_path, payload)
+        else:
+            _write(file_path, payload)
 
     def add_new_tab(self, qurl=None, label="Homepage"):
         if qurl is None:
@@ -3825,11 +3382,7 @@ class Browser(QMainWindow):
         # Apply current settings to the new tab
         self.apply_settings_to_new_tab(browser)
         
-        # Set up console message capture for DevTools (disabled due to Qt6 compatibility)
-        # if hasattr(self, 'dev_tools') and hasattr(browser.page(), 'javaScriptConsoleMessage'):
-        #     browser.page().javaScriptConsoleMessage.connect(
-        #         lambda level, message, line, source: self.dev_tools.log_js_console_message(level, message, line, source)
-        #     )
+        return browser
 
     def add_private_tab(self, qurl=None, label="Private Tab"):
         # Check if private browsing should be default
@@ -3862,14 +3415,50 @@ class Browser(QMainWindow):
         browser.loadFinished.connect(lambda _, i=i, browser=browser: self.tabs.setTabText(i, f"🔒 {browser.page().title()}"))
         browser.page().iconUrlChanged.connect(lambda _url, i=i, b=browser: self._update_tab_favicon(i, b.url()))
 
+        return browser
+
+    def _current_web_view(self):
+        widget = self.tabs.currentWidget()
+        return widget if isinstance(widget, CustomWebEngineView) else None
+
+    def _ensure_active_web_view(self, default_url: QUrl | None = None, label: str = "Homepage"):
+        view = self._current_web_view()
+        if view is None:
+            created = self.add_new_tab(default_url or QUrl(self.homepage_url), label)
+            view = created if isinstance(created, CustomWebEngineView) else self._current_web_view()
+        return view
+
+    def _open_url(self, url, label: str = "Tab"):
+        if not url:
+            return
+        target = url if isinstance(url, QUrl) else QUrl(str(url))
+        view = self._ensure_active_web_view(target, label)
+        if view is not None:
+            view.setUrl(target)
+
+    def navigate_back(self):
+        view = self._current_web_view()
+        if view is not None and hasattr(view, 'back'):
+            view.back()
+
+    def navigate_forward(self):
+        view = self._current_web_view()
+        if view is not None and hasattr(view, 'forward'):
+            view.forward()
+
     def tab_open_doubleclick(self, i):
         if i == -1:
             self.add_new_tab()
 
     def current_tab_changed(self, i):
-        qurl = self.tabs.currentWidget().url()
-        self.update_urlbar(qurl, self.tabs.currentWidget())
-        self.update_title(self.tabs.currentWidget())
+        if i < 0:
+            return
+        widget = self._current_web_view()
+        if widget is None:
+            return
+        qurl = widget.url()
+        self.update_urlbar(qurl, widget)
+        self.update_title(widget)
 
     def close_current_tab(self, i):
         if self.tabs.count() < 2:
@@ -3886,19 +3475,22 @@ class Browser(QMainWindow):
         self.tabs.removeTab(i)
 
     def update_title(self, browser):
-        if browser != self.tabs.currentWidget():
+        widget = self._current_web_view()
+        if widget is None or browser is not widget:
             return
-
-        current_widget = self.tabs.currentWidget()
-        if current_widget is not None and current_widget.page() is not None:
-            title = current_widget.page().title()
+        page = widget.page() if hasattr(widget, 'page') else None
+        if page is not None:
+            title = page.title()
             self.setWindowTitle(f"surfscape - {title}")
 
     def navigate_home(self):
-        self.tabs.currentWidget().setUrl(QUrl(self.homepage_url))
+        self._open_url(self.homepage_url, "Homepage")
 
     def update_urlbar(self, q, browser=None):
-        if browser != self.tabs.currentWidget():
+        current = self._current_web_view()
+        if browser is not None and browser is not current:
+            return
+        if current is None and browser is None:
             return
 
         # Set full URL including the scheme
@@ -3923,7 +3515,7 @@ class Browser(QMainWindow):
                 }
                 search_url = search_urls.get(search_engine, search_urls['duckduckgo'])
                 url = search_url.format(url)
-        self.tabs.currentWidget().setUrl(QUrl(url))
+        self._open_url(url, "Navigation")
 
     # -------------------- Favicon utilities --------------------
     def _favicon_key_for_url(self, url: str) -> str:
@@ -4213,10 +3805,6 @@ class Browser(QMainWindow):
         view_source_action.triggered.connect(self.view_source)
         view_menu.addAction(view_source_action)
         
-        developer_tools_action = QAction("Developer Tools", self)
-        developer_tools_action.triggered.connect(self.show_developer_tools)
-        view_menu.addAction(developer_tools_action)
-
         # History menu (before Bookmarks)
         self.history_menu = menu_bar.addMenu("History")
         self.history_menu.aboutToShow.connect(self.update_history_menu)
@@ -4262,11 +3850,11 @@ class Browser(QMainWindow):
         self.addToolBar(navtb)
 
         self.back_button = QAction("←", self)
-        self.back_button.triggered.connect(lambda: self.tabs.currentWidget().back())
+        self.back_button.triggered.connect(self.navigate_back)
         navtb.addAction(self.back_button)
 
         self.forward_button = QAction("→", self)
-        self.forward_button.triggered.connect(lambda: self.tabs.currentWidget().forward())
+        self.forward_button.triggered.connect(self.navigate_forward)
         navtb.addAction(self.forward_button)
 
         self.reload_button = QAction("⟳", self)
@@ -4299,8 +3887,8 @@ class Browser(QMainWindow):
         QShortcut(QKeySequence("Ctrl+R"), self).activated.connect(self.refresh_current_tab)
         QShortcut(QKeySequence("F5"), self).activated.connect(self.refresh_current_tab)
         QShortcut(QKeySequence("Alt+Home"), self).activated.connect(self.navigate_home)
-        QShortcut(QKeySequence("Alt+Left"), self).activated.connect(lambda: self.tabs.currentWidget().back())
-        QShortcut(QKeySequence("Alt+Right"), self).activated.connect(lambda: self.tabs.currentWidget().forward())
+        QShortcut(QKeySequence("Alt+Left"), self).activated.connect(self.navigate_back)
+        QShortcut(QKeySequence("Alt+Right"), self).activated.connect(self.navigate_forward)
         QShortcut(QKeySequence("Ctrl+D"), self).activated.connect(self.toggle_bookmark)
         QShortcut(QKeySequence("Ctrl+F"), self).activated.connect(self.show_find_dialog)
         QShortcut(QKeySequence("Ctrl+="), self).activated.connect(self.zoom_in)
@@ -4308,7 +3896,6 @@ class Browser(QMainWindow):
         QShortcut(QKeySequence("F11"), self).activated.connect(self.toggle_fullscreen)
         QShortcut(QKeySequence("Ctrl+U"), self).activated.connect(self.view_source)
         QShortcut(QKeySequence("Ctrl+P"), self).activated.connect(self.print_page)
-        QShortcut(QKeySequence("F12"), self).activated.connect(self.show_developer_tools)
         QShortcut(QKeySequence("Ctrl+Shift+N"), self).activated.connect(lambda: self.add_private_tab())
         
         # Add AI assistant shortcut
@@ -4327,21 +3914,20 @@ class Browser(QMainWindow):
         action_map = {
             'new_tab': lambda: self.add_new_tab(),
             'close_tab': lambda: self.close_current_tab(self.tabs.currentIndex()),
-            'reload': lambda: self.tabs.currentWidget().reload() if self.tabs.currentWidget() else None,
-            'hard_reload': lambda: self.tabs.currentWidget().reload() if self.tabs.currentWidget() else None,
+            'reload': self.refresh_current_tab,
+            'hard_reload': self.refresh_current_tab,
             'find': self.show_find_dialog,
             'zoom_in': self.zoom_in,
             'zoom_out': self.zoom_out,
             'zoom_reset': self.zoom_reset,
             'home': self.navigate_home,
-            'back': lambda: self.tabs.currentWidget().back() if self.tabs.currentWidget() else None,
-            'forward': lambda: self.tabs.currentWidget().forward() if self.tabs.currentWidget() else None,
+            'back': self.navigate_back,
+            'forward': self.navigate_forward,
             'bookmark': self.toggle_bookmark,
             'bookmarks': lambda: None,  # Placeholder for bookmarks manager
             'history': lambda: None,  # Placeholder for history manager
             'downloads': self.show_download_manager,
             'settings': self.show_settings_dialog,
-            'developer_tools': self.show_developer_tools,
             'view_source': self.view_source,
             'fullscreen': self.toggle_fullscreen,
             'private_tab': lambda: self.add_private_tab()
@@ -4349,7 +3935,7 @@ class Browser(QMainWindow):
         
         # Apply shortcuts (skip ones already handled by default shortcuts)
         skip_defaults = {'new_tab', 'close_tab', 'reload', 'find', 'zoom_in', 'zoom_reset', 
-                        'home', 'back', 'forward', 'bookmark', 'developer_tools', 
+                        'home', 'back', 'forward', 'bookmark', 
                         'view_source', 'fullscreen', 'private_tab'}
         
         for action, method in action_map.items():
@@ -4370,10 +3956,14 @@ class Browser(QMainWindow):
             self.bookmark_button.setIconText("☆")  # Set to unpressed state
         else:
             # Add new bookmark
-            current_widget = self.tabs.currentWidget()
+            current_widget = self._current_web_view()
+            title = url
             if current_widget is not None and current_widget.page() is not None:
-                title = current_widget.page().title()
-                self.bookmarks.append([title, url])
+                try:
+                    title = current_widget.page().title() or title
+                except Exception:
+                    title = url
+            self.bookmarks.append([title, url])
             self.bookmark_button.setIconText("★")  # Change to pressed state
         self.save_json(self.bookmarks_file, self.bookmarks)  # Save bookmarks
 
@@ -4410,6 +4000,7 @@ class Browser(QMainWindow):
             
             # Create the AI widget
             self.ai_widget = ClaudeAIWidget(self.settings_manager)
+            self.ai_widget.background_pool = self.background_pool
             
             # Add widgets based on position
             if panel_position == 'left':
@@ -4446,31 +4037,39 @@ class Browser(QMainWindow):
 
     def select_all_text(self):
         widget = self.focusWidget()
+        view = self._current_web_view()
+        page = view.page() if view is not None and hasattr(view, 'page') else None
         if isinstance(widget, QLineEdit):
             widget.selectAll()
-        elif isinstance(self.tabs.currentWidget(), QWebEngineView):
-            self.tabs.currentWidget().page().runJavaScript("document.execCommand('selectAll');")
+        elif page is not None:
+            page.runJavaScript("document.execCommand('selectAll');")
 
     def cut_text(self):
         widget = self.focusWidget()
+        view = self._current_web_view()
+        page = view.page() if view is not None and hasattr(view, 'page') else None
         if isinstance(widget, QLineEdit):
             widget.cut()
-        elif isinstance(self.tabs.currentWidget(), QWebEngineView):
-            self.tabs.currentWidget().page().runJavaScript("document.execCommand('cut');")
+        elif page is not None:
+            page.runJavaScript("document.execCommand('cut');")
 
     def copy_text(self):
         widget = self.focusWidget()
+        view = self._current_web_view()
+        page = view.page() if view is not None and hasattr(view, 'page') else None
         if isinstance(widget, QLineEdit):
             widget.copy()
-        elif isinstance(self.tabs.currentWidget(), QWebEngineView):
-            self.tabs.currentWidget().page().runJavaScript("document.execCommand('copy');")
+        elif page is not None:
+            page.runJavaScript("document.execCommand('copy');")
 
     def paste_text(self):
         widget = self.focusWidget()
+        view = self._current_web_view()
+        page = view.page() if view is not None and hasattr(view, 'page') else None
         if isinstance(widget, QLineEdit):
             widget.paste()
-        elif isinstance(self.tabs.currentWidget(), QWebEngineView):
-            self.tabs.currentWidget().page().runJavaScript("document.execCommand('paste');")
+        elif page is not None:
+            page.runJavaScript("document.execCommand('paste');")
             
     def add_to_history(self, qurl, title):
         """ Add a page to the history """
@@ -4534,7 +4133,7 @@ class Browser(QMainWindow):
             def on_item_clicked(item):
                 url = item.data(Qt.ItemDataRole.UserRole)
                 if url:
-                    self.tabs.currentWidget().setUrl(QUrl(url))
+                    self._open_url(url, 'History')
                     self.history_menu.hide()
 
             history_list.itemClicked.connect(on_item_clicked)
@@ -4560,7 +4159,7 @@ class Browser(QMainWindow):
                 # Fallback to basic actions
                 for title, url in reversed(self.history[-50:]):
                     history_action = QAction(title or url, self)
-                    history_action.triggered.connect(lambda _, url=url: self.tabs.currentWidget().setUrl(QUrl(url)))
+                    history_action.triggered.connect(lambda _, url=url: self._open_url(url, 'History'))
                     self.history_menu.addAction(history_action)
         # Keep URL bar autocomplete fresh
         self.update_url_autocomplete()
@@ -4629,7 +4228,7 @@ class Browser(QMainWindow):
             def on_item_clicked(item):
                 url = item.data(Qt.ItemDataRole.UserRole)
                 if url:
-                    self.tabs.currentWidget().setUrl(QUrl(url))
+                    self._open_url(url, 'Bookmark')
                     # Close the menu after selection
                     self.bookmarks_menu.hide()
 
@@ -4658,7 +4257,7 @@ class Browser(QMainWindow):
                 # Fallback to simple actions if anything goes wrong
                 for title, url in self.bookmarks:
                     bookmark_action = QAction(title or url, self)
-                    bookmark_action.triggered.connect(lambda _, url=url: self.tabs.currentWidget().setUrl(QUrl(url)))
+                    bookmark_action.triggered.connect(lambda _, url=url: self._open_url(url, 'Bookmark'))
                     self.bookmarks_menu.addAction(bookmark_action)
         # Keep URL bar autocomplete fresh
         self.update_url_autocomplete()
@@ -4921,12 +4520,15 @@ class Browser(QMainWindow):
         
     def load_cookies_to_web_engine(self):
         """ Load cookies into the web engine """
-        # Check if tabs exist and have a current widget
-        if self.tabs.count() == 0 or not self.tabs.currentWidget():
+        view = self._current_web_view()
+        if view is None:
             return
             
         try:
-            profile = self.tabs.currentWidget().page().profile()
+            page = view.page() if hasattr(view, 'page') else None
+            if page is None:
+                return
+            profile = page.profile()
             cookie_store = profile.cookieStore()
             for cookie in self.cookies:
                 qcookie = QNetworkCookie(
@@ -4991,12 +4593,16 @@ class Browser(QMainWindow):
         self.save_json(self.cookies_file, self.cookies)
         
         # Clear cookies from web engine
-        if self.tabs.count() > 0 and self.tabs.currentWidget():
+        view = self._current_web_view()
+        if view is not None:
             try:
-                profile = self.tabs.currentWidget().page().profile()
+                page = view.page() if hasattr(view, 'page') else None
+                if page is None:
+                    return
+                profile = page.profile()
                 cookie_store = profile.cookieStore()
                 cookie_store.deleteAllCookies()
-            except:
+            except Exception:
                 pass
         
         # Update UI displays
@@ -5244,13 +4850,6 @@ class Browser(QMainWindow):
         """Handle tab loading start with performance optimizations"""
         self.tab_loading_pool.add(browser)
         # Performance: Disable expensive operations during loading
-        dt = getattr(self, 'dev_tools', None)
-        if dt is not None:
-            try:
-                if dt.isVisible():
-                    dt.pause_updates()
-            except Exception:
-                pass
         # Adblock: prefetch domain-specific rule subset early using CPU pool
         try:
             if self.ad_blocker_rules and getattr(self.ad_blocker_rules, 'prefetch_domain', None):
@@ -5279,71 +4878,64 @@ class Browser(QMainWindow):
         QTimer.singleShot(50, lambda: self.add_to_history(browser.url(), browser.page().title()))
         
         # Re-enable dev tools updates if no tabs are loading
-        if (not self.tab_loading_pool and
-            getattr(self, 'dev_tools', None) is not None):
-            try:
-                if self.dev_tools.isVisible():
-                    self.dev_tools.resume_updates()
-            except Exception:
-                pass
         # Lightweight performance markers (optional) - collect and print key paint metrics
-                if getattr(self, 'perf_trace', False):
-                        try:
-                                if browser and hasattr(browser, 'page'):
-                                        page = browser.page()
-                                        js = """
-                                                (function(){
-                                                    if(!window.performance){return null;}
-                                                    let nav = (performance.getEntriesByType && performance.getEntriesByType('navigation')) ? performance.getEntriesByType('navigation')[0] : null;
-                                                    let paint = (performance.getEntriesByType && performance.getEntriesByType('paint')) ? performance.getEntriesByType('paint') : [];
-                                                    let fp = null; let fcp = null;
-                                                    for (const p of paint){ if(p.name==='first-paint') fp = p.startTime; if(p.name==='first-contentful-paint') fcp = p.startTime; }
-                                                    const t = performance.timing || {};
-                                                    function clamp(v){return (typeof v==='number' && v>=0 && v<1e8)? v : null;}
-                                                    let metrics = {};
-                                                    if(nav){
-                                                        metrics = {
-                                                            dns: clamp(nav.domainLookupEnd - nav.domainLookupStart),
-                                                            connect: clamp(nav.connectEnd - nav.connectStart),
-                                                            ttfb: clamp(nav.responseStart - nav.startTime),
-                                                            response: clamp(nav.responseEnd - nav.responseStart),
-                                                            domContentLoaded: clamp(nav.domContentLoadedEventEnd - nav.startTime),
-                                                            firstPaint: clamp(fp),
-                                                            firstContentfulPaint: clamp(fcp),
-                                                            load: clamp(nav.loadEventEnd - nav.startTime)
-                                                        };
-                                                    } else if(t.navigationStart){
-                                                        const ns = t.navigationStart;
-                                                        metrics = {
-                                                            dns: clamp(t.domainLookupEnd - t.domainLookupStart),
-                                                            connect: clamp(t.connectEnd - t.connectStart),
-                                                            ttfb: clamp(t.responseStart - ns),
-                                                            response: clamp(t.responseEnd - t.responseStart),
-                                                            domContentLoaded: clamp(t.domContentLoadedEventEnd - ns),
-                                                            firstPaint: clamp(fp),
-                                                            firstContentfulPaint: clamp(fcp),
-                                                            load: clamp(t.loadEventEnd - ns)
-                                                        };
+        if getattr(self, 'perf_trace', False):
+                try:
+                        if browser and hasattr(browser, 'page'):
+                                page = browser.page()
+                                js = """
+                                        (function(){
+                                            if(!window.performance){return null;}
+                                            let nav = (performance.getEntriesByType && performance.getEntriesByType('navigation')) ? performance.getEntriesByType('navigation')[0] : null;
+                                            let paint = (performance.getEntriesByType && performance.getEntriesByType('paint')) ? performance.getEntriesByType('paint') : [];
+                                            let fp = null; let fcp = null;
+                                            for (const p of paint){ if(p.name==='first-paint') fp = p.startTime; if(p.name==='first-contentful-paint') fcp = p.startTime; }
+                                            const t = performance.timing || {};
+                                            function clamp(v){return (typeof v==='number' && v>=0 && v<1e8)? v : null;}
+                                            let metrics = {};
+                                            if(nav){
+                                                metrics = {
+                                                    dns: clamp(nav.domainLookupEnd - nav.domainLookupStart),
+                                                    connect: clamp(nav.connectEnd - nav.connectStart),
+                                                    ttfb: clamp(nav.responseStart - nav.startTime),
+                                                    response: clamp(nav.responseEnd - nav.responseStart),
+                                                    domContentLoaded: clamp(nav.domContentLoadedEventEnd - nav.startTime),
+                                                    firstPaint: clamp(fp),
+                                                    firstContentfulPaint: clamp(fcp),
+                                                    load: clamp(nav.loadEventEnd - nav.startTime)
+                                                };
+                                            } else if(t.navigationStart){
+                                                const ns = t.navigationStart;
+                                                metrics = {
+                                                    dns: clamp(t.domainLookupEnd - t.domainLookupStart),
+                                                    connect: clamp(t.connectEnd - t.connectStart),
+                                                    ttfb: clamp(t.responseStart - ns),
+                                                    response: clamp(t.responseEnd - t.responseStart),
+                                                    domContentLoaded: clamp(t.domContentLoadedEventEnd - ns),
+                                                    firstPaint: clamp(fp),
+                                                    firstContentfulPaint: clamp(fcp),
+                                                    load: clamp(t.loadEventEnd - ns)
+                                                };
+                                            }
+                                            // Gather top slow resources (exclude data: and chrome-extension:)
+                                            let slow = [];
+                                            if (performance.getEntriesByType){
+                                                const resources = performance.getEntriesByType('resource') || [];
+                                                for (const r of resources){
+                                                    if((r.initiatorType==='img'||r.initiatorType==='script'||r.initiatorType==='css'||r.initiatorType==='fetch'||r.initiatorType==='xmlhttprequest') && r.duration>500){
+                                                            if(r.name.startsWith('data:')||r.name.startsWith('chrome-extension')) continue;
+                                                            slow.push({name:r.name.slice(0,140), type:r.initiatorType, dur: Math.round(r.duration)});
                                                     }
-                                                    // Gather top slow resources (exclude data: and chrome-extension:)
-                                                    let slow = [];
-                                                    if (performance.getEntriesByType){
-                                                        const resources = performance.getEntriesByType('resource') || [];
-                                                        for (const r of resources){
-                                                            if((r.initiatorType==='img'||r.initiatorType==='script'||r.initiatorType==='css'||r.initiatorType==='fetch'||r.initiatorType==='xmlhttprequest') && r.duration>500){
-                                                                 if(r.name.startsWith('data:')||r.name.startsWith('chrome-extension')) continue;
-                                                                 slow.push({name:r.name.slice(0,140), type:r.initiatorType, dur: Math.round(r.duration)});
-                                                            }
-                                                        }
-                                                        slow.sort((a,b)=>b.dur - a.dur);
-                                                        metrics.slow = slow.slice(0,5);
-                                                    }
-                                                    return metrics;
-                                                })();
-                                        """
-                                        page.runJavaScript(js,  lambda m: self._log_perf_metrics(m))
-                        except Exception:
-                                pass
+                                                }
+                                                slow.sort((a,b)=>b.dur - a.dur);
+                                                metrics.slow = slow.slice(0,5);
+                                            }
+                                            return metrics;
+                                        })();
+                                """
+                                page.runJavaScript(js,  lambda m: self._log_perf_metrics(m))
+                except Exception:
+                        pass
 
     def _log_perf_metrics(self, metrics):
         try:
@@ -5365,10 +4957,9 @@ class Browser(QMainWindow):
     
     def refresh_current_tab(self):
         """Refresh the current tab safely"""
-        if self.tabs.count() > 0 and self.tabs.currentWidget():
-            current_tab = self.tabs.currentWidget()
-            if hasattr(current_tab, 'reload'):
-                current_tab.reload()
+        view = self._current_web_view()
+        if view is not None and hasattr(view, 'reload'):
+            view.reload()
     
     def _apply_web_engine_settings(self):
         """Apply privacy and security settings to web engine"""
@@ -5510,21 +5101,21 @@ class Browser(QMainWindow):
         self.find_dialog.show_and_focus()
     
     def zoom_in(self):
-        current_widget = self.tabs.currentWidget()
-        if current_widget:
-            current_zoom = current_widget.zoomFactor()
-            current_widget.setZoomFactor(min(current_zoom * 1.1, 5.0))
+        view = self._current_web_view()
+        if view is not None:
+            current_zoom = view.zoomFactor()
+            view.setZoomFactor(min(current_zoom * 1.1, 5.0))
     
     def zoom_out(self):
-        current_widget = self.tabs.currentWidget()
-        if current_widget:
-            current_zoom = current_widget.zoomFactor()
-            current_widget.setZoomFactor(max(current_zoom * 0.9, 0.1))
+        view = self._current_web_view()
+        if view is not None:
+            current_zoom = view.zoomFactor()
+            view.setZoomFactor(max(current_zoom * 0.9, 0.1))
     
     def zoom_reset(self):
-        current_widget = self.tabs.currentWidget()
-        if current_widget:
-            current_widget.setZoomFactor(1.0)
+        view = self._current_web_view()
+        if view is not None:
+            view.setZoomFactor(1.0)
     
     def toggle_fullscreen(self):
         if self.isFullScreen():
@@ -5543,21 +5134,14 @@ class Browser(QMainWindow):
             QMessageBox.warning(self, "Error", f"Failed to open View Source: {str(e)}")
     
     def print_page(self):
-        current_widget = self.tabs.currentWidget()
-        if current_widget:
+        view = self._current_web_view()
+        if view is not None:
             printer = QPrinter()
             print_dialog = QPrintDialog(printer, self)
             if print_dialog.exec() == QDialog.DialogCode.Accepted:
-                current_widget.page().printToPdf(printer.outputFileName() or "page.pdf")
-    
-    def show_developer_tools(self):
-        dt = self._ensure_dev_tools()
-        dt.show()
-        dt.raise_()
-        dt.activateWindow()
-        if hasattr(self, 'tabs') and self.tabs is not None:
-            # Refresh lazily shortly after showing to keep UI responsive
-            QTimer.singleShot(50, dt.refresh_all_data)
+                page = view.page() if hasattr(view, "page") else None
+                if page is not None:
+                    page.printToPdf(printer.outputFileName() or "page.pdf")
     
     def save_session(self):
         session_data = []
@@ -5568,30 +5152,26 @@ class Browser(QMainWindow):
                     'url': tab.url().toString(),
                     'title': self.tabs.tabText(i)
                 })
-        
-        try:
-            with open(self.session_file, 'w') as f:
-                json.dump(session_data, f, indent=2)
-        except Exception as e:
-            print(f"Failed to save session: {e}")
-    
+
+        self.save_json(self.session_file, session_data)
+
+
     def restore_session(self):
-        if os.path.exists(self.session_file):
-            try:
-                with open(self.session_file, 'r') as f:
-                    session_data = json.load(f)
-                
-                if session_data:
-                    for tab_data in session_data:
-                        self.add_new_tab(QUrl(tab_data['url']), tab_data['title'])
-                else:
-                    self.add_new_tab(QUrl(self.homepage_url), "Homepage")
-            except Exception as e:
-                print(f"Failed to restore session: {e}")
-                self.add_new_tab(QUrl(self.homepage_url), "Homepage")
+        if not os.path.exists(self.session_file):
+            self.add_new_tab(QUrl(self.homepage_url), 'Homepage')
+            return
+
+        session_data = self.load_json(self.session_file)
+        if not session_data:
+            self.add_new_tab(QUrl(self.homepage_url), 'Homepage')
         else:
-            self.add_new_tab(QUrl(self.homepage_url), "Homepage")
-    
+            for tab_data in session_data:
+                url = tab_data.get('url')
+                title = tab_data.get('title', 'Tab')
+                if url:
+                    self.add_new_tab(QUrl(url), title)
+
+
     def closeEvent(self, event):
         # Check if we should confirm closing multiple tabs
         if (self.tabs.count() > 1 and 
@@ -5614,31 +5194,38 @@ class Browser(QMainWindow):
         if self.settings_manager.get('restore_session', True):
             self.save_session()
         
-        # Close multiprocessing pool
-        if self.cpu_pool:
-            self.cpu_pool.shutdown(wait=True)
-        
+        # Close background worker pools
+        pool = getattr(self, 'background_pool', None)
+        if pool is not None:
+            pool.shutdown(wait=True)
+        io_pool = getattr(self, 'io_pool', None)
+        if io_pool is not None and io_pool is not pool:
+            io_pool.shutdown(wait=True)
+
         super().closeEvent(event)
 
     def _init_adblock_legacy(self):
         """Use the original AdBlockerWorker to build rules, then attach them."""
         async def run():
-            # Pass CPU pool and cache path so subset compilation can use multiprocessing and cached list
+            # Pass shared thread pool and cache path so subset compilation can reuse cached list
             cache_path = os.path.join(self.data_dir, 'adblock_lists.cache')
-            worker = AdBlockerWorker(cpu_pool=self.cpu_pool, cache_path=cache_path)
+            worker = AdBlockerWorker(pool=self.background_pool, cache_path=cache_path)
             await worker.download_adblock_lists()
             # In incremental mode worker.rules may be None intentionally
             if not worker.incremental_enabled and not worker.rules:
-                print("Adblock: no rules built")
-                return
-            # Store worker as provider (supports get_rules_for)
-            self.ad_blocker_rules = worker
+                worker._ensure_full_rules_async()
+                print("Adblock: fallback rules scheduled build (incremental disabled)")
+            # Store compiled engine (worker exposes should_block for incremental mode)
+            engine = worker
+            self.ad_blocker_rules = engine
             if hasattr(self, 'network_interceptor'):
-                self.network_interceptor.ad_blocker_rules = worker
+                self.network_interceptor.ad_blocker_rules = engine
+                self.network_interceptor.domain_block_set = set(getattr(engine, 'domain_block_set', set()))
             if hasattr(self, 'private_network_interceptor'):
-                self.private_network_interceptor.ad_blocker_rules = worker
-            rules = worker.rules
-            print(f"Ad blocker ready: {len(getattr(rules, 'rules', [])) if rules else 0} rules")
+                self.private_network_interceptor.ad_blocker_rules = engine
+                self.private_network_interceptor.domain_block_set = set(getattr(engine, 'domain_block_set', set()))
+            total_rules = len(worker._all_rule_lines) if getattr(worker, '_all_rule_lines', None) else 0
+            print(f"Ad blocker ready: {total_rules} source rules (incremental={worker.incremental_enabled})")
 
         def _runner():
             try:
@@ -5676,30 +5263,17 @@ class Browser(QMainWindow):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Surfscape Browser")
-    default_workers = os.cpu_count() or 1
+    default_workers = max(2, os.cpu_count() or 1)
     parser.add_argument("--workers", type=int, default=default_workers,
-                        help="Number of worker processes for CPU-bound tasks (markdown rendering, adblock parsing). Set 1 to disable multiprocessing.")
+                        help="Number of worker threads for background tasks (markdown rendering, adblock parsing, file IO).")
     # Fast start control (fast start enabled by default)
     fast_group = parser.add_mutually_exclusive_group()
     fast_group.add_argument("--fast-start", action="store_true", help="Force enable fast start optimizations (default)")
     fast_group.add_argument("--no-fast-start", action="store_true", help="Disable fast start (loads everything eagerly)")
     args, unknown = parser.parse_known_args()
 
-    # Force 'spawn' to avoid Qt duplication caused by 'fork' (especially in packaged builds)
-    try:
-        multiprocessing.set_start_method('spawn', force=True)
-    except RuntimeError:
-        # Already set in some environments; safe to continue
-        pass
-    # Ensure multiprocessing works under frozen executables (Windows/macOS packaging)
-    try:
-        multiprocessing.freeze_support()
-    except Exception:
-        pass
-
-    # Create pool BEFORE QApplication so child processes do not inherit a living Qt state
-    # but avoid spinning up extra processes on ARM unless explicitly requested
-    cpu_pool = CPUPool(args.workers)
+    # Create the shared worker pool before QApplication so threads are ready immediately
+    background_pool = IOPool(args.workers)
 
     # Trim custom args for Qt
     qt_argv = [sys.argv[0]] + [a for a in unknown]
@@ -5730,12 +5304,17 @@ if __name__ == "__main__":
         fast_start_flag = False
     elif args.fast_start:
         fast_start_flag = True
-    window = Browser(cpu_pool=cpu_pool, fast_start=fast_start_flag)
+    window = Browser(io_pool=background_pool, fast_start=fast_start_flag)
     
     window.show()
     exit_code = app.exec()
     try:
-        cpu_pool.shutdown()
+        background_pool.shutdown(wait=True)
+    except Exception:
+        pass
+    try:
+        if hasattr(window, 'io_pool') and window.io_pool is not None and window.io_pool is not background_pool:
+            window.io_pool.shutdown(wait=True)
     except Exception:
         pass
     sys.exit(exit_code)
