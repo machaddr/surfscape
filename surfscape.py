@@ -385,7 +385,7 @@ class SettingsManager:
             # AI Assistant Settings
             'ai_enabled': True,
             'ai_api_key': '',
-            'ai_model': 'claude-3-7-sonnet-20250219',
+            'ai_model': 'claude-sonnet-4-5-20250929',
             'ai_panel_position': 'right',
             'ai_panel_width': 0.3,
             'voice_recognition_language': 'en-US',
@@ -1113,11 +1113,9 @@ class AdvancedSettingsDialog(QDialog):
         self.ai_model_combo = QComboBox()
         self.ai_model_combo.setEditable(True)
         self.ai_model_combo.addItems([
-            "claude-3-7-sonnet-20250219",
-            "claude-3-haiku-20240307",
-            "claude-3-opus-20240229"
+            "claude-sonnet-4-5-20250929"
         ])
-        self.ai_model_combo.setCurrentText(self.settings_manager.get('ai_model', 'claude-3-7-sonnet-20250219'))
+        self.ai_model_combo.setCurrentText(self.settings_manager.get('ai_model', 'claude-sonnet-4-5-20250929'))
         group_layout.addWidget(self.ai_model_combo, 2, 1)
         
         group_layout.addWidget(QLabel("Panel Position:"), 3, 0)
