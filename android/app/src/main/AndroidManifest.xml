@@ -5,13 +5,13 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
-        android:name=".SurfscapeApp"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="Surfscape"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:usesCleartextTraffic="true"
         android:supportsRtl="true"
+        android:hardwareAccelerated="true"
         android:theme="@style/Theme.Surfscape"
         android:enableOnBackInvokedCallback="true"
         tools:ignore="UnusedAttribute">

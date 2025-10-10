@@ -1,13 +1,13 @@
-# Surfscape Android (GeckoView)
+# Surfscape Android (Chromium WebView)
 
-This Android module provides the Surfscape mobile browser shell powered by GeckoView, mirroring the desktop app’s multi-tab workflow and navigation chrome.
+This Android module delivers the Surfscape mobile experience on top of the system Chromium WebView, mirroring the desktop browser’s productivity-first workflow.
 
 ## Features
-- GeckoView rendering engine with crash recovery
+- Chromium WebView engine with hardened defaults, file uploads, and smart external intent routing
 - Surfscape-inspired UI chrome: pinned toolbar actions, bookmark toggle, Surfscape Copilot placeholder, and quick settings
 - Lightweight tab strip with infinite tab support and per-tab state restoration
 - Smart URL/search field that mirrors the desktop default search providers
-- Adaptive APK splits per ABI, resource shrinking, and R8 minification for significantly smaller artifacts
+- Lean universal APK with resource shrinking and R8 minification for compact installs
 - Intent filters to open HTTP(S) links from other Android apps
 
 ## Build Locally
@@ -30,9 +30,10 @@ Set these in repository settings for automatic signing:
 
 ## Customizing
 - Homepage & default search engine: tweak defaults in `MainActivity` (see `HOME_URL_DEFAULT` and `searchEngines`) or expose additional options via the settings dialog.
-- GeckoView version: update `geckoviewVersion` in the root `build.gradle.kts` to match your desired Gecko channel.
+- WebView behaviour: adjust `configureWebView` inside `MainActivity` to toggle features (dark mode, UA overrides, media playback rules, etc.).
 - App ID: change `applicationId` & `namespace` in `app/build.gradle.kts` and manifest package references.
 - Toolbar icons: vector assets live under `app/src/main/res/drawable`. Replace or extend as needed.
 
 ## Notes
-GeckoView Nightly/Beta/Release artifacts differ by version string; keep them aligned across all architectures (this config uses a single AAR with Gradle ABI splits to emit per-architecture APKs).
+- Android System WebView updates land via the Play Store; keeping it current unlocks automatic engine upgrades.
+- `androidx.webkit:webkit` is bundled to access modern WebView APIs (user agent negotiation, metrics, etc.).

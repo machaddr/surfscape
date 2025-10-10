@@ -75,11 +75,11 @@
                 android:layout_weight="1"
                 android:hint="@string/enter_url"
                 app:boxBackgroundColor="@android:color/transparent"
-                app:endIconMode="clear_text"
-                app:endIconTint="@android:color/white"
                 app:boxStrokeColor="@android:color/white"
                 app:boxStrokeWidth="1dp"
                 app:boxStrokeWidthFocused="2dp"
+                app:endIconMode="clear_text"
+                app:endIconTint="@android:color/white"
                 app:hintTextColor="@android:color/white">
 
                 <com.google.android.material.textfield.TextInputEditText
@@ -172,8 +172,8 @@
         android:progress="0"
         android:visibility="gone" />
 
-    <org.mozilla.geckoview.GeckoView
-        android:id="@+id/geckoView"
+    <FrameLayout
+        android:id="@+id/webContainer"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"

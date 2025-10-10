@@ -29,4 +29,8 @@
     <string name="bookmark_added">Bookmark added</string>
     <string name="bookmark_removed">Bookmark removed</string>
     <string name="settings_saved">Settings updated</string>
+    <string name="stop_loading">Stop</string>
+    <string name="status_error">Unable to load page</string>
+    <string name="opening_external">Opening with another app…</string>
+    <string name="no_app_found">No compatible app installed to open this link.</string>
 </resources>

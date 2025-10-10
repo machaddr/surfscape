@@ -1,35 +1,42 @@
 package com.surfscape.browser
 
+import android.annotation.SuppressLint
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.graphics.Bitmap
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.os.StrictMode
-import android.util.Log
 import android.util.Patterns
 import android.view.KeyEvent
 import android.view.LayoutInflater
 import android.view.View
+import android.view.ViewGroup
 import android.view.inputmethod.EditorInfo
+import android.webkit.CookieManager
+import android.webkit.ValueCallback
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.ArrayAdapter
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.content.res.AppCompatResources
-import androidx.core.content.ContextCompat
 import androidx.core.view.children
 import androidx.core.view.isVisible
 import androidx.core.widget.addTextChangedListener
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 import com.google.android.material.chip.Chip
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.surfscape.browser.databinding.ActivityMainBinding
-import com.surfscape.browser.BuildConfig
-import org.mozilla.geckoview.GeckoRuntime
-import org.mozilla.geckoview.GeckoSession
-import org.mozilla.geckoview.GeckoSession.ContentDelegate
-import org.mozilla.geckoview.GeckoSession.ProgressDelegate
 import java.net.URLEncoder
+import java.util.ArrayList
+import java.util.LinkedHashSet
 import java.util.concurrent.atomic.AtomicLong
 
 class MainActivity : AppCompatActivity() {
@@ -38,104 +45,101 @@ class MainActivity : AppCompatActivity() {
 
     private data class BrowserTab(
         val id: Long,
-        var session: GeckoSession,
-        var title: String,
-        var lastUrl: String,
+        val webView: WebView,
+        var title: String = "",
+        var url: String = "",
+        var isLoading: Boolean = false,
         var canGoBack: Boolean = false,
-        var canGoForward: Boolean = false,
-        val isPrivate: Boolean = false,
-        var lastProgress: Int = 0,
-        var statusText: String = ""
+        var canGoForward: Boolean = false
     )
 
     private lateinit var binding: ActivityMainBinding
-    private lateinit var runtime: GeckoRuntime
-    private lateinit var searchEngines: List<SearchEngine>
-
-    private val tabIdSequence = AtomicLong(0)
+    private val prefs by lazy { getSharedPreferences(PREFS_NAME, MODE_PRIVATE) }
+    private val tabIdGenerator = AtomicLong(0)
     private val tabs = mutableListOf<BrowserTab>()
     private var activeTabId: Long? = null
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private var ignoreUrlBarChange = false
+    private var ignoreUrlCallbacks = false
+    private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
 
-    private val prefs by lazy { getSharedPreferences(PREFS_NAME, MODE_PRIVATE) }
+    private lateinit var searchEngines: List<SearchEngine>
+
+    private val fileChooserLauncher =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            val callback = fileChooserCallback
+            val uris = WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data)
+            callback?.onReceiveValue(uris)
+            fileChooserCallback = null
+        }
 
     private val activeTab: BrowserTab?
         get() = tabs.firstOrNull { it.id == activeTabId }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        enforceStrictModeIfDebug()
-
-        runtime = try {
-            (application as SurfscapeApp).runtime
-        } catch (t: Throwable) {
-            Log.e(TAG, "Unable to obtain GeckoRuntime", t)
-            Toast.makeText(this, "Browser engine not available", Toast.LENGTH_LONG).show()
-            finish()
-            return
-        }
-
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
         setSupportActionBar(binding.topToolbar)
         supportActionBar?.setDisplayShowTitleEnabled(false)
         binding.topToolbar.title = ""
-        binding.tabStrip.isSingleSelection = true
 
-        window.statusBarColor = ContextCompat.getColor(this, R.color.purple_700)
+        WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
+        CookieManager.getInstance().setAcceptCookie(true)
 
-        searchEngines = listOf(
-            SearchEngine(
-                id = "duckduckgo",
-                label = getString(R.string.search_engine_duckduckgo),
-                queryTemplate = "https://html.duckduckgo.com/html/?q=%s"
-            ),
-            SearchEngine(
-                id = "startpage",
-                label = getString(R.string.search_engine_startpage),
-                queryTemplate = "https://www.startpage.com/do/search?q=%s"
-            ),
-            SearchEngine(
-                id = "google",
-                label = getString(R.string.search_engine_google),
-                queryTemplate = "https://www.google.com/search?q=%s"
-            ),
-            SearchEngine(
-                id = "brave",
-                label = getString(R.string.search_engine_brave),
-                queryTemplate = "https://search.brave.com/search?q=%s"
-            )
-        )
-
+        searchEngines = buildSearchEngines()
         setupUiListeners()
-        updateNavigationState()
-        updateBookmarkIcon()
-        updateStatus(getString(R.string.status_ready))
-        restoreOrCreateInitialTab()
+
+        if (savedInstanceState != null) {
+            restoreFromState(savedInstanceState)
+        } else {
+            restoreLastSession()
+        }
     }
 
-    private fun enforceStrictModeIfDebug() {
-        if (!BuildConfig.DEBUG) return
-        StrictMode.setThreadPolicy(
-            StrictMode.ThreadPolicy.Builder()
-                .detectAll()
-                .penaltyLog()
-                .build()
-        )
-        StrictMode.setVmPolicy(
-            StrictMode.VmPolicy.Builder()
-                .detectLeakedClosableObjects()
-                .detectActivityLeaks()
-                .penaltyLog()
-                .build()
-        )
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putStringArrayList(KEY_STATE_URLS, ArrayList(tabs.map { it.url }))
+        val activeIndex = tabs.indexOfFirst { it.id == activeTabId }.takeIf { it >= 0 } ?: 0
+        outState.putInt(KEY_STATE_ACTIVE_INDEX, activeIndex)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        activeTab?.webView?.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        activeTab?.webView?.onResume()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        persistSession()
+    }
+
+    override fun onDestroy() {
+        tabs.forEach { tab ->
+            (tab.webView.parent as? ViewGroup)?.removeView(tab.webView)
+            tab.webView.stopLoading()
+            tab.webView.destroy()
+        }
+        tabs.clear()
+        super.onDestroy()
+    }
+
+    override fun onBackPressed() {
+        val tab = activeTab
+        if (tab?.webView?.canGoBack() == true) {
+            tab.webView.goBack()
+        } else {
+            super.onBackPressed()
+        }
     }
 
     private fun setupUiListeners() {
         binding.urlBar.addTextChangedListener {
-            if (!ignoreUrlBarChange) {
+            if (!ignoreUrlCallbacks) {
                 updateBookmarkIcon()
             }
         }
@@ -156,283 +160,291 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        binding.btnBack.setOnClickListener {
-            activeTab?.takeIf { it.canGoBack }?.session?.goBack()
-        }
-        binding.btnForward.setOnClickListener {
-            activeTab?.takeIf { it.canGoForward }?.session?.goForward()
-        }
+        binding.btnBack.setOnClickListener { activeTab?.webView?.goBack() }
+        binding.btnForward.setOnClickListener { activeTab?.webView?.goForward() }
+        binding.btnHome.setOnClickListener { loadInActiveTab(homepageUrl()) }
         binding.btnReload.setOnClickListener {
-            activeTab?.session?.reload()
-        }
-        binding.btnHome.setOnClickListener {
-            loadInActiveTab(homepageUrl())
+            val tab = activeTab ?: return@setOnClickListener
+            if (tab.isLoading) {
+                tab.webView.stopLoading()
+            } else {
+                tab.webView.reload()
+            }
         }
         binding.btnNewTab.setOnClickListener {
-            createTab(initialUrl = homepageUrl(), select = true)
+            val tab = createTab(homepageUrl(), select = true)
+            tab.webView.requestFocus()
         }
         binding.btnBookmark.setOnClickListener { toggleBookmark() }
         binding.btnAi.setOnClickListener { showAiPlaceholder() }
         binding.btnSettings.setOnClickListener { showSettingsDialog() }
+    }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            onBackPressedDispatcher.addCallback(this, object : androidx.activity.OnBackPressedCallback(true) {
-                override fun handleOnBackPressed() {
-                    if (activeTab?.canGoBack == true) {
-                        activeTab?.session?.goBack()
-                    } else {
-                        isEnabled = false
-                        onBackPressedDispatcher.onBackPressed()
-                    }
-                }
-            })
+    private fun buildSearchEngines(): List<SearchEngine> = listOf(
+        SearchEngine(
+            id = "duckduckgo",
+            label = getString(R.string.search_engine_duckduckgo),
+            queryTemplate = "https://html.duckduckgo.com/html/?q=%s"
+        ),
+        SearchEngine(
+            id = "startpage",
+            label = getString(R.string.search_engine_startpage),
+            queryTemplate = "https://www.startpage.com/do/search?q=%s"
+        ),
+        SearchEngine(
+            id = "google",
+            label = getString(R.string.search_engine_google),
+            queryTemplate = "https://www.google.com/search?q=%s"
+        ),
+        SearchEngine(
+            id = "brave",
+            label = getString(R.string.search_engine_brave),
+            queryTemplate = "https://search.brave.com/search?q=%s"
+        )
+    )
+
+    private fun restoreFromState(state: Bundle) {
+        val urls = state.getStringArrayList(KEY_STATE_URLS)
+        val activeIndex = state.getInt(KEY_STATE_ACTIVE_INDEX, 0)
+        if (urls.isNullOrEmpty()) {
+            createTab(homepageUrl(), select = true)
+            return
+        }
+        urls.forEachIndexed { index, url ->
+            val tab = createTab(url ?: homepageUrl(), select = index == activeIndex)
+            if (index == activeIndex) {
+                selectTab(tab.id)
+            }
         }
     }
 
-    private fun restoreOrCreateInitialTab() {
-        val lastUrl = prefs.getString(KEY_LAST_URL, null)
-        val startUrl = lastUrl ?: homepageUrl()
-        val selfTest = System.getenv("SURFSCAPE_SELFTEST") == "1"
-        val tab = createTab(
-            initialUrl = if (selfTest) "about:blank" else startUrl,
-            select = true,
-            autoLoad = !selfTest
-        )
-        if (selfTest) {
-            val testHtml =
-                "<html><body style='font-family:sans-serif'><h3>Surfscape Self-Test</h3>" +
-                        "<p>If you can read this, GeckoView rendered a local page.</p>" +
-                        "<p>User Agent should appear below after JS runs.</p>" +
-                        "<div id='ua'></div><script>document.getElementById('ua').textContent = navigator.userAgent;</script></body></html>"
-            val dataUrl = "data:text/html;base64," +
-                    android.util.Base64.encodeToString(testHtml.toByteArray(), android.util.Base64.NO_WRAP)
-            tab.session.loadUri(dataUrl)
-            mainHandler.postDelayed({
-                if (!isDestroyed && tabs.any { it.id == tab.id }) {
-                    tab.session.loadUri(startUrl)
-                }
-            }, 1500)
+    private fun restoreLastSession() {
+        val stored = prefs.getStringSet(KEY_LAST_SESSION, null)?.toList()
+        if (!stored.isNullOrEmpty()) {
+            stored.forEachIndexed { index, url ->
+                createTab(url, select = index == 0)
+            }
+        } else {
+            val startUrl = prefs.getString(KEY_LAST_URL, homepageUrl()) ?: homepageUrl()
+            createTab(startUrl, select = true)
         }
     }
 
-    private fun createTab(
-        initialUrl: String?,
-        select: Boolean,
-        isPrivate: Boolean = false,
-        autoLoad: Boolean = true
-    ): BrowserTab {
-        val session = GeckoSession()
-        val tabId = tabIdSequence.incrementAndGet()
-        val tab = BrowserTab(
-            id = tabId,
-            session = session,
-            title = getString(R.string.default_tab_title),
-            lastUrl = initialUrl ?: homepageUrl(),
-            isPrivate = isPrivate
-        )
-        configureSession(tab)
-        session.open(runtime)
-        if (autoLoad && initialUrl != null) {
-            session.loadUri(initialUrl)
-        }
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun createTab(initialUrl: String, select: Boolean, autoLoad: Boolean = true): BrowserTab {
+        val webView = WebView(this)
+        val tab = BrowserTab(id = tabIdGenerator.incrementAndGet(), webView = webView)
+        configureWebView(tab)
+
         tabs += tab
         refreshTabStrip()
+
         if (select) {
             selectTab(tab.id)
         }
+
+        if (autoLoad && initialUrl.isNotBlank()) {
+            tab.webView.loadUrl(initialUrl)
+        } else {
+            tab.url = initialUrl
+        }
+        persistSession()
         return tab
     }
 
-    private fun configureSession(tab: BrowserTab) {
-        tab.session.setNavigationDelegate(object : GeckoSession.NavigationDelegate {
-            override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
-                tab.canGoBack = canGoBack
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun configureWebView(tab: BrowserTab) {
+        val webView = tab.webView
+        webView.layoutParams = ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        webView.isFocusableInTouchMode = true
+
+        with(webView.settings) {
+            javaScriptEnabled = true
+            domStorageEnabled = true
+            databaseEnabled = true
+            loadsImagesAutomatically = true
+            mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+            builtInZoomControls = true
+            displayZoomControls = false
+            useWideViewPort = true
+            loadWithOverviewMode = true
+            mediaPlaybackRequiresUserGesture = false
+            textZoom = 100
+            userAgentString = "${userAgentString} SurfscapeMobile/${BuildConfig.VERSION_NAME}"
+        }
+
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+            WebSettingsCompat.setAlgorithmicDarkeningAllowed(webView.settings, true)
+        }
+
+        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
+
+        webView.webChromeClient = object : WebChromeClient() {
+            override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                tab.isLoading = newProgress in 0..99
                 if (tab.id == activeTabId) {
-                    updateNavigationState()
+                    binding.progressBar.isVisible = newProgress in 1..99
+                    binding.progressBar.progress = newProgress
+                    updateReloadButton(tab.isLoading)
                 }
             }
 
-            override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
-                tab.canGoForward = canGoForward
+            override fun onReceivedTitle(view: WebView?, title: String?) {
+                tab.title = title?.takeIf { it.isNotBlank() } ?: getString(R.string.default_tab_title)
                 if (tab.id == activeTabId) {
-                    updateNavigationState()
-                }
-            }
-
-            override fun onLocationChange(
-                session: GeckoSession,
-                url: String?,
-                permissions: MutableList<GeckoSession.PermissionDelegate.ContentPermission>,
-                hasUserGesture: Boolean
-            ) {
-                if (url.isNullOrBlank()) return
-                tab.lastUrl = url
-                tab.statusText = hostForStatus(url)
-                if (!tab.isPrivate) {
-                    prefs.edit().putString(KEY_LAST_URL, url).apply()
-                }
-                if (tab.id == activeTabId) {
-                    withUi {
-                        updateUrlBar(url)
-                        updateStatus(tab.statusText.ifBlank { getString(R.string.status_ready) })
-                        updateBookmarkIcon()
-                    }
-                }
-            }
-        })
-
-        tab.session.contentDelegate = object : ContentDelegate {
-            override fun onTitleChange(session: GeckoSession, title: String?) {
-                val safeTitle = title?.takeIf { it.isNotBlank() } ?: getString(R.string.default_tab_title)
-                tab.title = safeTitle
-                if (tab.id == activeTabId) {
-                    withUi {
-                        updateWindowTitle(tab)
-                        updateTabStripSelection()
-                    }
+                    updateWindowTitle(tab)
+                    updateTabChipSelection()
                 } else {
-                    withUi { updateTabStripSelection() }
+                    updateTabChipSelection()
                 }
             }
 
-            override fun onCrash(session: GeckoSession) {
-                Log.e(TAG, "GeckoSession crashed for tab ${tab.id}; recreating")
-                withUi {
-                    Toast.makeText(this@MainActivity, "Tab crashed, reloading…", Toast.LENGTH_LONG).show()
+            override fun onShowFileChooser(
+                webView: WebView?,
+                filePathCallback: ValueCallback<Array<Uri>>?,
+                fileChooserParams: FileChooserParams?
+            ): Boolean {
+                fileChooserCallback?.onReceiveValue(null)
+                fileChooserCallback = filePathCallback
+                val intent = try {
+                    fileChooserParams?.createIntent() ?: return false
+                } catch (e: Exception) {
+                    fileChooserCallback = null
+                    return false
                 }
-                handleTabCrash(tab)
+                return try {
+                    fileChooserLauncher.launch(intent)
+                    true
+                } catch (_: ActivityNotFoundException) {
+                    fileChooserCallback = null
+                    Toast.makeText(this@MainActivity, getString(R.string.no_app_found), Toast.LENGTH_SHORT).show()
+                    false
+                }
             }
         }
 
-        tab.session.progressDelegate = object : ProgressDelegate {
-            override fun onProgressChange(session: GeckoSession, progress: Int) {
-                tab.lastProgress = progress
+        webView.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                val uri = request?.url ?: return false
+                return handleExternalUri(uri)
+            }
+
+            override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                return handleExternalUrl(url)
+            }
+
+            override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
+                val safeUrl = url ?: return
+                tab.url = safeUrl
+                tab.isLoading = true
+                tab.canGoBack = tab.webView.canGoBack()
+                tab.canGoForward = tab.webView.canGoForward()
                 if (tab.id == activeTabId) {
-                    withUi {
-                        binding.progressBar.isVisible = progress in 1..99
-                        binding.progressBar.progress = progress
-                    }
+                    updateUrlBar(safeUrl)
+                    updateStatus(getHostForStatus(safeUrl))
+                    updateNavigationState()
+                    updateReloadButton(true)
                 }
             }
 
-            override fun onSecurityChange(session: GeckoSession, securityInfo: ProgressDelegate.SecurityInformation) {
-                // placeholder for future security indicators
-            }
-
-            override fun onPageStart(session: GeckoSession, url: String) {
-                tab.statusText = getString(R.string.status_loading)
-                tab.lastProgress = 0
+            override fun onPageFinished(view: WebView?, url: String?) {
+                val safeUrl = url ?: return
+                tab.url = safeUrl
+                tab.isLoading = false
+                tab.canGoBack = tab.webView.canGoBack()
+                tab.canGoForward = tab.webView.canGoForward()
                 if (tab.id == activeTabId) {
-                    withUi {
-                        updateStatus(getString(R.string.status_loading))
-                        binding.progressBar.isVisible = true
-                        binding.progressBar.progress = 0
-                    }
+                    updateUrlBar(tab.url)
+                    updateStatus(getHostForStatus(tab.url))
+                    updateNavigationState()
+                    updateReloadButton(false)
+                    updateBookmarkIcon()
                 }
+                prefs.edit().putString(KEY_LAST_URL, tab.url).apply()
+                persistSession()
             }
 
-            override fun onPageStop(session: GeckoSession, success: Boolean) {
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: WebResourceError?
+            ) {
                 if (tab.id == activeTabId) {
-                    withUi {
-                        binding.progressBar.isVisible = false
-                        updateStatus(tab.statusText.ifBlank { getString(R.string.status_ready) })
-                    }
+                    updateStatus(getString(R.string.status_error))
                 }
+                Toast.makeText(
+                    this@MainActivity,
+                    getString(R.string.status_error),
+                    Toast.LENGTH_SHORT
+                ).show()
             }
         }
-    }
 
-    private fun handleTabCrash(tab: BrowserTab) {
-        val previousSession = tab.session
-        val restoreUrl = tab.lastUrl.takeIf { it.isNotBlank() } ?: homepageUrl()
-        try {
-            previousSession.close()
-        } catch (ignored: Exception) {
-            // ignore
-        }
-        val newSession = GeckoSession()
-        tab.session = newSession
-        configureSession(tab)
-        try {
-            newSession.open(runtime)
-        } catch (t: Throwable) {
-            Log.e(TAG, "Failed to reopen GeckoSession for crashed tab", t)
-            withUi {
-                Toast.makeText(this, "Failed to reopen tab", Toast.LENGTH_LONG).show()
+        webView.setDownloadListener { url, _, _, _, _ ->
+            if (handleExternalUrl(url)) {
+                Toast.makeText(this, getString(R.string.opening_external), Toast.LENGTH_SHORT).show()
             }
-            return
         }
-        if (tab.id == activeTabId) {
-            withUi { attachSession(tab) }
-        }
-        newSession.loadUri(restoreUrl)
     }
 
     private fun selectTab(tabId: Long) {
-        val target = tabs.firstOrNull { it.id == tabId } ?: return
-        if (activeTabId == target.id && binding.geckoView.session == target.session) {
-            return
-        }
-        val previous = activeTab
-        activeTabId = target.id
-        if (previous != null && previous.session != target.session) {
-            try {
-                previous.session.setActive(false)
-            } catch (ignored: Throwable) {
-            }
-        }
-        attachSession(target)
-    }
+        val tab = tabs.firstOrNull { it.id == tabId } ?: return
+        if (tab.id == activeTabId) return
 
-    private fun attachSession(tab: BrowserTab) {
-        binding.geckoView.setSession(tab.session)
-        try {
-            tab.session.setActive(true)
-        } catch (t: Throwable) {
-            Log.w(TAG, "setActive(true) failed", t)
-        }
+        activeTab?.webView?.onPause()
+        activeTabId = tab.id
+
+        binding.webContainer.removeAllViews()
+        (tab.webView.parent as? ViewGroup)?.removeView(tab.webView)
+        binding.webContainer.addView(tab.webView)
+        tab.webView.onResume()
+        tab.webView.requestFocus()
+
         updateWindowTitle(tab)
-        updateUrlBar(tab.lastUrl)
+        updateUrlBar(tab.url)
+        updateReloadButton(tab.isLoading)
         updateNavigationState()
+        updateStatus(getHostForStatus(tab.url))
         updateBookmarkIcon()
-        updateStatus(tab.statusText.ifBlank { getString(R.string.status_ready) })
-        binding.progressBar.isVisible = tab.lastProgress in 1..99
-        binding.progressBar.progress = tab.lastProgress
-        updateTabStripSelection()
+        updateTabChipSelection()
     }
 
     private fun refreshTabStrip() {
-        withUi {
-            binding.tabStrip.removeAllViews()
-            tabs.forEach { tab ->
-                val chip = Chip(this).apply {
-                    id = View.generateViewId()
-                    text = tab.title.takeIf { it.isNotBlank() } ?: getString(R.string.default_tab_title)
-                    isCheckable = true
-                    isChecked = tab.id == activeTabId
-                    isCloseIconVisible = tabs.size > 1
-                    closeIcon = AppCompatResources.getDrawable(this@MainActivity, R.drawable.ic_close)
-                    setOnClickListener { selectTab(tab.id) }
-                    setOnCloseIconClickListener { closeTab(tab.id) }
-                }
-                binding.tabStrip.addView(chip)
-            }
-            updateTabStripSelection()
+        binding.tabStrip.removeAllViews()
+        tabs.forEach { tab ->
+            val chip = createTabChip(tab)
+            binding.tabStrip.addView(chip)
         }
+        updateTabChipSelection()
     }
 
-    private fun updateTabStripSelection() {
-        val currentId = activeTabId
+    private fun createTabChip(tab: BrowserTab): Chip {
+        val chip = Chip(this, null, com.google.android.material.R.attr.chipStyle)
+        chip.id = View.generateViewId()
+        chip.text = tab.title.takeIf { it.isNotBlank() } ?: getString(R.string.default_tab_title)
+        chip.isCheckable = true
+        chip.isChecked = tab.id == activeTabId
+        chip.isCloseIconVisible = tabs.size > 1
+        chip.closeIcon = AppCompatResources.getDrawable(this, R.drawable.ic_close)
+        chip.setOnClickListener { selectTab(tab.id) }
+        chip.setOnCloseIconClickListener { closeTab(tab.id) }
+        chip.tag = tab.id
+        return chip
+    }
+
+    private fun updateTabChipSelection() {
+        val current = activeTabId
         binding.tabStrip.children.forEachIndexed { index, view ->
             val chip = view as? Chip ?: return@forEachIndexed
             val tab = tabs.getOrNull(index) ?: return@forEachIndexed
             chip.text = tab.title.takeIf { it.isNotBlank() } ?: getString(R.string.default_tab_title)
             chip.isCloseIconVisible = tabs.size > 1
-            chip.isChecked = tab.id == currentId
+            chip.isChecked = tab.id == current
             if (chip.isChecked) {
-                binding.tabScroll.post {
-                    binding.tabScroll.smoothScrollTo(chip.left, 0)
-                }
+                binding.tabScroll.post { binding.tabScroll.smoothScrollTo(chip.left, 0) }
             }
         }
     }
@@ -441,39 +453,30 @@ class MainActivity : AppCompatActivity() {
         val index = tabs.indexOfFirst { it.id == tabId }
         if (index == -1) return
         val tab = tabs.removeAt(index)
-        try {
-            tab.session.close()
-        } catch (ignored: Exception) {
-        }
+        (tab.webView.parent as? ViewGroup)?.removeView(tab.webView)
+        tab.webView.stopLoading()
+        tab.webView.destroy()
+
         if (tabs.isEmpty()) {
             activeTabId = null
-            updateWindowTitle(null)
-            updateUrlBar("")
-            updateNavigationState()
-            updateBookmarkIcon()
-            updateStatus(getString(R.string.status_ready))
-            binding.progressBar.isVisible = false
-            createTab(initialUrl = homepageUrl(), select = true)
+            createTab(homepageUrl(), select = true)
         } else {
-            val newIndex = when {
-                index < tabs.size -> index
-                else -> tabs.lastIndex
-            }
+            val newIndex = index.coerceAtMost(tabs.lastIndex)
             selectTab(tabs[newIndex].id)
-            refreshTabStrip()
         }
+        refreshTabStrip()
+        persistSession()
     }
 
     private fun submitUrlFromBar() {
-        val raw = binding.urlBar.text?.toString() ?: return
-        val target = buildTargetForInput(raw) ?: return
+        val input = binding.urlBar.text?.toString().orEmpty()
+        val target = buildTargetForInput(input) ?: return
         loadInActiveTab(target)
     }
 
     private fun loadInActiveTab(target: String) {
         val tab = activeTab ?: return
-        Log.d(TAG, "Loading $target in tab ${tab.id}")
-        tab.session.loadUri(target)
+        tab.webView.loadUrl(target)
     }
 
     private fun buildTargetForInput(raw: String): String? {
@@ -495,80 +498,80 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun toggleBookmark() {
+        val tab = activeTab ?: return
+        val url = tab.url
+        if (url.isBlank()) return
+        val current = prefs.getStringSet(KEY_BOOKMARKS, emptySet())?.toMutableSet() ?: mutableSetOf()
+        val added: Boolean
+        if (current.contains(url)) {
+            current.remove(url)
+            added = false
+        } else {
+            current.add(url)
+            added = true
+        }
+        prefs.edit().putStringSet(KEY_BOOKMARKS, current).apply()
+        updateBookmarkIcon()
+        val message = if (added) R.string.bookmark_added else R.string.bookmark_removed
+        Toast.makeText(this, getString(message), Toast.LENGTH_SHORT).show()
+    }
+
+    private fun updateBookmarkIcon() {
+        val tab = activeTab
+        val currentUrl = tab?.url.orEmpty()
+        val saved = prefs.getStringSet(KEY_BOOKMARKS, emptySet()) ?: emptySet()
+        val icon = if (currentUrl.isNotBlank() && saved.contains(currentUrl)) {
+            R.drawable.ic_star_filled
+        } else {
+            R.drawable.ic_star_border
+        }
+        binding.btnBookmark.setImageDrawable(AppCompatResources.getDrawable(this, icon))
+    }
+
+    private fun updateReloadButton(isLoading: Boolean) {
+        val icon = if (isLoading) R.drawable.ic_close else R.drawable.ic_refresh
+        binding.btnReload.setImageDrawable(AppCompatResources.getDrawable(this, icon))
+        binding.btnReload.contentDescription = getString(
+            if (isLoading) R.string.stop_loading else R.string.reload
+        )
+    }
+
+    private fun updateNavigationState() {
+        val tab = activeTab
+        binding.btnBack.isEnabled = tab?.webView?.canGoBack() == true
+        binding.btnForward.isEnabled = tab?.webView?.canGoForward() == true
+        binding.btnReload.isEnabled = tab != null
+        binding.btnHome.isEnabled = tab != null
+        binding.btnBookmark.isEnabled = tab != null
+    }
+
+    private fun updateUrlBar(url: String) {
+        ignoreUrlCallbacks = true
+        binding.urlBar.setText(url)
+        binding.urlBar.setSelection(binding.urlBar.text?.length ?: 0)
+        ignoreUrlCallbacks = false
+    }
+
+    private fun updateStatus(text: String) {
+        binding.statusBar.text = if (text.isBlank()) getString(R.string.status_ready) else text
+    }
+
+    private fun updateWindowTitle(tab: BrowserTab) {
+        title = if (tab.title.isBlank()) {
+            getString(R.string.app_name)
+        } else {
+            "${getString(R.string.app_name)} - ${tab.title}"
+        }
+        binding.topToolbar.subtitle = tab.title
+    }
+
     private fun homepageUrl(): String =
         prefs.getString(KEY_HOMEPAGE, HOME_URL_DEFAULT)?.takeIf { it.isNotBlank() } ?: HOME_URL_DEFAULT
 
     private fun currentSearchEngine(): SearchEngine {
         val id = prefs.getString(KEY_SEARCH_ENGINE, searchEngines.first().id)
         return searchEngines.firstOrNull { it.id == id } ?: searchEngines.first()
-    }
-
-    private fun hostForStatus(url: String): String {
-        return try {
-            val uri = Uri.parse(url)
-            uri.host ?: url
-        } catch (_: Exception) {
-            url
-        }
-    }
-
-    private fun updateUrlBar(url: String) {
-        ignoreUrlBarChange = true
-        binding.urlBar.setText(url)
-        binding.urlBar.setSelection(binding.urlBar.text?.length ?: 0)
-        ignoreUrlBarChange = false
-    }
-
-    private fun updateWindowTitle(tab: BrowserTab?) {
-        title = when {
-            tab == null -> "Surfscape"
-            tab.title.isBlank() -> "Surfscape"
-            else -> "Surfscape - ${tab.title}"
-        }
-    }
-
-    private fun updateNavigationState() {
-        val tab = activeTab
-        binding.btnBack.isEnabled = tab?.canGoBack == true
-        binding.btnForward.isEnabled = tab?.canGoForward == true
-        binding.btnReload.isEnabled = tab != null
-        binding.btnHome.isEnabled = tab != null
-        binding.btnBookmark.isEnabled = tab != null && tab.lastUrl.isNotBlank()
-    }
-
-    private fun updateBookmarkIcon() {
-        val tab = activeTab
-        val drawable = if (tab != null && tab.lastUrl.isNotBlank() && isBookmarked(tab.lastUrl)) {
-            R.drawable.ic_star_filled
-        } else {
-            R.drawable.ic_star_border
-        }
-        binding.btnBookmark.setImageDrawable(AppCompatResources.getDrawable(this, drawable))
-    }
-
-    private fun isBookmarked(url: String): Boolean {
-        val saved = prefs.getStringSet(KEY_BOOKMARKS, emptySet()) ?: emptySet()
-        return saved.contains(url)
-    }
-
-    private fun toggleBookmark() {
-        val tab = activeTab ?: return
-        val url = tab.lastUrl
-        if (url.isBlank()) return
-        val current = prefs.getStringSet(KEY_BOOKMARKS, emptySet()) ?: emptySet()
-        val updated = current.toMutableSet()
-        val added: Boolean
-        if (updated.contains(url)) {
-            updated.remove(url)
-            added = false
-        } else {
-            updated.add(url)
-            added = true
-        }
-        prefs.edit().putStringSet(KEY_BOOKMARKS, updated).apply()
-        updateBookmarkIcon()
-        val msg = if (added) R.string.bookmark_added else R.string.bookmark_removed
-        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     }
 
     private fun showAiPlaceholder() {
@@ -580,10 +583,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showSettingsDialog() {
-        val view = LayoutInflater.from(this).inflate(R.layout.dialog_settings, null)
+        val content = LayoutInflater.from(this).inflate(R.layout.dialog_settings, null)
         val homepageInput =
-            view.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.homepageInput)
-        val searchInput = view.findViewById<MaterialAutoCompleteTextView>(R.id.searchEngineInput)
+            content.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.homepageInput)
+        val searchInput = content.findViewById<MaterialAutoCompleteTextView>(R.id.searchEngineInput)
+
         homepageInput.setText(homepageUrl())
         val adapter = ArrayAdapter(
             this,
@@ -595,18 +599,18 @@ class MainActivity : AppCompatActivity() {
 
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.settings_title)
-            .setView(view)
+            .setView(content)
             .setPositiveButton(R.string.settings_save) { _, _ ->
                 val homepageValue = homepageInput.text?.toString()?.trim().orEmpty()
-                val normalizedHome = when {
+                val normalizedHomepage = when {
                     homepageValue.isBlank() -> HOME_URL_DEFAULT
                     SCHEME_REGEX.containsMatchIn(homepageValue) -> homepageValue
                     else -> "https://$homepageValue"
                 }
-                val selectedLabel = searchInput.text?.toString() ?: ""
-                val chosenEngine = searchEngines.firstOrNull { it.label == selectedLabel } ?: currentSearchEngine()
+                val chosenEngine = searchEngines.firstOrNull { it.label == searchInput.text.toString() }
+                    ?: currentSearchEngine()
                 prefs.edit()
-                    .putString(KEY_HOMEPAGE, normalizedHome)
+                    .putString(KEY_HOMEPAGE, normalizedHomepage)
                     .putString(KEY_SEARCH_ENGINE, chosenEngine.id)
                     .apply()
                 Toast.makeText(this, R.string.settings_saved, Toast.LENGTH_SHORT).show()
@@ -615,72 +619,49 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    private fun updateStatus(text: String) {
-        binding.statusBar.text = text
+    private fun persistSession() {
+        val ordered = LinkedHashSet<String>()
+        tabs.mapNotNullTo(ordered) { it.url.takeIf { url -> url.isNotBlank() } }
+        prefs.edit().putStringSet(KEY_LAST_SESSION, ordered).apply()
     }
 
-    private fun withUi(block: () -> Unit) {
-        if (isDestroyed || isFinishing) return
-        if (Looper.myLooper() == Looper.getMainLooper()) {
-            block()
-        } else {
-            mainHandler.post {
-                if (!isDestroyed && !isFinishing) {
-                    block()
-                }
-            }
+    private fun handleExternalUrl(url: String?): Boolean {
+        val uri = url?.let { Uri.parse(it) } ?: return false
+        return handleExternalUri(uri)
+    }
+
+    private fun handleExternalUri(uri: Uri): Boolean {
+        val scheme = uri.scheme?.lowercase() ?: return false
+        if (scheme == "http" || scheme == "https") {
+            return false
+        }
+        return try {
+            startActivity(Intent(Intent.ACTION_VIEW, uri))
+            true
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, getString(R.string.no_app_found), Toast.LENGTH_SHORT).show()
+            true
         }
     }
 
-    override fun onPause() {
-        super.onPause()
-        activeTab?.session?.let {
-            try {
-                it.setActive(false)
-            } catch (t: Throwable) {
-                Log.w(TAG, "setActive(false) failed", t)
-            }
-        }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        activeTab?.session?.let {
-            try {
-                it.setActive(true)
-            } catch (t: Throwable) {
-                Log.w(TAG, "setActive(true) failed", t)
-            }
-        }
-    }
-
-    override fun onDestroy() {
-        tabs.forEach {
-            try {
-                it.session.close()
-            } catch (_: Exception) {
-            }
-        }
-        tabs.clear()
-        super.onDestroy()
-    }
-
-    @Deprecated("Deprecated in Java")
-    override fun onBackPressed() {
-        if (activeTab?.canGoBack == true) {
-            activeTab?.session?.goBack()
-        } else {
-            super.onBackPressed()
+    private fun getHostForStatus(url: String): String {
+        return try {
+            val uri = Uri.parse(url)
+            uri.host ?: url
+        } catch (_: Exception) {
+            url
         }
     }
 
     companion object {
-        private const val TAG = "Surfscape"
         private const val PREFS_NAME = "surfscape_mobile"
         private const val KEY_LAST_URL = "last_url"
         private const val KEY_BOOKMARKS = "bookmarks"
         private const val KEY_HOMEPAGE = "homepage_url"
         private const val KEY_SEARCH_ENGINE = "search_engine"
+        private const val KEY_LAST_SESSION = "session_urls"
+        private const val KEY_STATE_URLS = "state_urls"
+        private const val KEY_STATE_ACTIVE_INDEX = "state_active_index"
         private const val HOME_URL_DEFAULT = "https://html.duckduckgo.com/html"
         private val SCHEME_REGEX = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://")
     }

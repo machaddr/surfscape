@@ -67,23 +67,12 @@ android {
         viewBinding = true
         buildConfig = true
     }
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            include("arm64-v8a", "armeabi-v7a")
-            isUniversalApk = false
-        }
-    }
     bundle {
         language {
             enableSplit = false
         }
     }
     packaging {
-        jniLibs {
-            useLegacyPackaging = false
-        }
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}" // typical exclusions
             excludes += "/META-INF/{DEPENDENCIES,LICENSE,LICENSE.txt,license.txt,NOTICE,NOTICE.txt,notice.txt}"
@@ -95,16 +84,13 @@ android {
     }
 }
 
-val geckoviewVersion: String by rootProject.extra
-
 dependencies {
     implementation(platform("org.jetbrains.kotlin:kotlin-bom:2.0.20"))
-    implementation("org.mozilla.geckoview:geckoview:$geckoviewVersion")
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
-    implementation("me.champeau.openbeans:openbeans:1.0.2")
+    implementation("androidx.webkit:webkit:1.14.0")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
