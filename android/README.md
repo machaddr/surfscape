@@ -1,12 +1,14 @@
 # Surfscape Android (GeckoView)
 
-This Android module provides a minimal GeckoView-based browser shell for Surfscape.
+This Android module provides the Surfscape mobile browser shell powered by GeckoView, mirroring the desktop app’s multi-tab workflow and navigation chrome.
 
 ## Features
-- GeckoView rendering engine
-- Basic navigation: back, forward, reload
-- URL bar with auto prepending of https://
-- Intent filters to open http(s) links
+- GeckoView rendering engine with crash recovery
+- Surfscape-inspired UI chrome: pinned toolbar actions, bookmark toggle, Surfscape Copilot placeholder, and quick settings
+- Lightweight tab strip with infinite tab support and per-tab state restoration
+- Smart URL/search field that mirrors the desktop default search providers
+- Adaptive APK splits per ABI, resource shrinking, and R8 minification for significantly smaller artifacts
+- Intent filters to open HTTP(S) links from other Android apps
 
 ## Build Locally
 ```bash
@@ -27,9 +29,10 @@ Set these in repository settings for automatic signing:
 - `ANDROID_KEY_PASSWORD`: Key password (often same as keystore password)
 
 ## Customizing
-- Homepage: edit the initial call to `loadUrl("example.org")` in `MainActivity.kt`.
-- GeckoView version: update `geckoviewVersion` in root `build.gradle.kts` (use a matching channel version).
+- Homepage & default search engine: tweak defaults in `MainActivity` (see `HOME_URL_DEFAULT` and `searchEngines`) or expose additional options via the settings dialog.
+- GeckoView version: update `geckoviewVersion` in the root `build.gradle.kts` to match your desired Gecko channel.
 - App ID: change `applicationId` & `namespace` in `app/build.gradle.kts` and manifest package references.
+- Toolbar icons: vector assets live under `app/src/main/res/drawable`. Replace or extend as needed.
 
 ## Notes
-GeckoView Nightly/Beta/Release artifacts differ by version string; keep them aligned across all architectures (this config uses a single AAR which internally bundles required pieces).
+GeckoView Nightly/Beta/Release artifacts differ by version string; keep them aligned across all architectures (this config uses a single AAR with Gradle ABI splits to emit per-architecture APKs).

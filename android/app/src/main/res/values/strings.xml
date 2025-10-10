@@ -6,4 +6,27 @@
     <string name="reload">Reload</string>
     <string name="enter_url">Enter URL</string>
     <string name="home">Home</string>
+    <string name="bookmark">Bookmark</string>
+    <string name="ai_assistant">AI Assistant</string>
+    <string name="settings">Settings</string>
+    <string name="new_tab">New Tab</string>
+    <string name="status_ready">Ready</string>
+    <string name="tab_close">Close Tab</string>
+    <string name="default_tab_title">New Tab</string>
+    <string name="dialog_dismiss">Dismiss</string>
+    <string name="ai_placeholder_title">Surfscape Copilot</string>
+    <string name="ai_placeholder_message">AI-assisted browsing is coming soon on Android. For now use Surfscape desktop for the full experience.</string>
+    <string name="settings_title">Surfscape Settings</string>
+    <string name="settings_homepage_label">Homepage URL</string>
+    <string name="settings_search_engine_label">Search Engine</string>
+    <string name="settings_save">Save</string>
+    <string name="settings_cancel">Cancel</string>
+    <string name="search_engine_duckduckgo">DuckDuckGo</string>
+    <string name="search_engine_startpage">Startpage</string>
+    <string name="search_engine_google">Google</string>
+    <string name="search_engine_brave">Brave</string>
+    <string name="status_loading">Loading…</string>
+    <string name="bookmark_added">Bookmark added</string>
+    <string name="bookmark_removed">Bookmark removed</string>
+    <string name="settings_saved">Settings updated</string>
 </resources>

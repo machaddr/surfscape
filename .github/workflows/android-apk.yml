@@ -113,9 +113,9 @@ jobs:
           ./gradlew clean assembleRelease --stacktrace
           ls -1 app/build/outputs/apk/release
 
-      - name: Upload Signed APK
+      - name: Upload Signed APKs
         uses: actions/upload-artifact@v4
         with:
           name: surfscape-apk-signed
-          path: android/app/build/outputs/apk/release/app-release.apk
+          path: android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error

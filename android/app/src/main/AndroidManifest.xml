@@ -10,6 +10,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="Surfscape"
         android:roundIcon="@mipmap/ic_launcher_round"
+        android:usesCleartextTraffic="true"
         android:supportsRtl="true"
         android:theme="@style/Theme.Surfscape"
         android:enableOnBackInvokedCallback="true"
