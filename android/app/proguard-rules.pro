@@ -8,3 +8,6 @@
 -keepclassmembers enum * { *; }
 # Avoid warnings for missing optional classes
 -dontwarn org.mozilla.**
+-dontwarn org.yaml.snakeyaml.**
+-keep class org.yaml.snakeyaml.** { *; }
+-keep class java.beans.** { *; }
