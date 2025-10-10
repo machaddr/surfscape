@@ -40,6 +40,7 @@ import com.google.android.material.slider.Slider
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.surfscape.browser.databinding.ActivityMainBinding
+import java.io.InputStream
 import java.net.URLEncoder
 import java.util.ArrayList
 import java.util.LinkedHashSet
@@ -47,6 +48,7 @@ import java.util.concurrent.atomic.AtomicLong
 import org.json.JSONArray
 import org.json.JSONObject
 import android.text.Html
+import android.text.TextUtils
 
 class MainActivity : AppCompatActivity() {
 
@@ -84,7 +86,7 @@ class MainActivity : AppCompatActivity() {
         }
 
     private val exportBookmarksLauncher =
-        registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        registerForActivityResult(ActivityResultContracts.CreateDocument("text/html")) { uri ->
             if (uri != null) {
                 exportBookmarksToUri(uri)
             }
@@ -973,8 +975,8 @@ class MainActivity : AppCompatActivity() {
                     writer.appendLine("<H1>Surfscape Bookmarks</H1>")
                     writer.appendLine("<DL><p>")
                     entries.forEach { (title, url) ->
-                        val safeUrl = Html.escapeHtml(url)
-                        val safeTitle = Html.escapeHtml(title)
+                        val safeUrl = escapeHtml(url)
+                        val safeTitle = escapeHtml(title)
                         writer.append("    <DT><A HREF=\"")
                         writer.append(safeUrl)
                         writer.append("\" ADD_DATE=\"")
@@ -995,14 +997,22 @@ class MainActivity : AppCompatActivity() {
 
     private fun importBookmarksFromUri(uri: Uri) {
         try {
-            val content = contentResolver.openInputStream(uri)?.use { stream ->
-                stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val preview = contentResolver.openInputStream(uri)?.use { input ->
+                val buffer = ByteArray(4096)
+                val read = input.read(buffer)
+                if (read <= 0) "" else String(buffer, 0, read, Charsets.UTF_8)
             } ?: throw IllegalStateException("Empty file")
-            val trimmed = content.trimStart()
+            val trimmed = preview.trimStart()
             val raw = loadBookmarksRaw()
-            val imported = when {
-                trimmed.startsWith("[") || trimmed.startsWith("{") -> importBookmarksJson(trimmed, raw)
-                else -> importBookmarksHtml(content, raw)
+            val imported = if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+                val full = contentResolver.openInputStream(uri)?.use { stream ->
+                    stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                } ?: ""
+                importBookmarksJson(full, raw)
+            } else {
+                contentResolver.openInputStream(uri)?.use { stream ->
+                    importBookmarksHtmlStream(stream, raw)
+                } ?: -1
             }
             when {
                 imported < 0 -> {
@@ -1051,27 +1061,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun importBookmarksHtml(content: String, raw: MutableSet<String>): Int {
-        val regex = Regex("<A\\s+[^>]*HREF\\s*=\\s*\"([^\"]+)\"[^>]*>(.*?)</A>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-        var imported = 0
+    private fun importBookmarksHtmlStream(stream: InputStream, raw: MutableSet<String>): Int {
+        val reader = stream.bufferedReader(Charsets.UTF_8)
+        val buffer = StringBuilder()
+        val chunk = CharArray(4096)
+        var totalImported = 0
         try {
-            regex.findAll(content).forEach { match ->
-                val url = match.groupValues.getOrNull(1)?.trim().orEmpty()
-                if (url.isBlank()) return@forEach
-                val titleHtml = match.groupValues.getOrNull(2)?.trim().orEmpty()
-                val title = htmlToPlain(titleHtml).ifBlank { getHostForStatus(url) }
-                findBookmarkEntry(url, raw)?.let { raw.remove(it) }
-                val stored = JSONObject().apply {
-                    put("title", title)
-                    put("url", url)
-                }.toString()
-                raw.add(stored)
-                imported++
+            reader.use { r ->
+                while (true) {
+                    val read = r.read(chunk)
+                    if (read == -1) break
+                    buffer.append(chunk, 0, read)
+                    totalImported += extractHtmlLinks(buffer, raw)
+                }
             }
+            totalImported += extractHtmlLinks(buffer, raw, final = true)
         } catch (_: Exception) {
             return -1
         }
-        return imported
+        return totalImported
     }
 
     private fun htmlToPlain(text: String): String {
@@ -1081,6 +1089,45 @@ class MainActivity : AppCompatActivity() {
             @Suppress("DEPRECATION")
             Html.fromHtml(text).toString().trim()
         }
+    }
+
+    private fun escapeHtml(value: String): String {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            Html.escapeHtml(value)
+        } else {
+            TextUtils.htmlEncode(value)
+        }
+    }
+
+    private fun extractHtmlLinks(buffer: StringBuilder, raw: MutableSet<String>, final: Boolean = false): Int {
+        var imported = 0
+        var lastProcessedEnd = 0
+        var searchStart = 0
+        while (true) {
+            val match = HTML_LINK_REGEX.find(buffer, searchStart) ?: break
+            val end = match.range.last + 1
+            val url = match.groupValues.getOrNull(1)?.trim().orEmpty()
+            val titleHtml = match.groupValues.getOrNull(2)?.trim().orEmpty()
+            if (url.isNotBlank()) {
+                val title = htmlToPlain(titleHtml).ifBlank { getHostForStatus(url) }
+                findBookmarkEntry(url, raw)?.let { raw.remove(it) }
+                val stored = JSONObject().apply {
+                    put("title", title)
+                    put("url", url)
+                }.toString()
+                raw.add(stored)
+                imported++
+            }
+            lastProcessedEnd = end
+            searchStart = end
+        }
+        if (lastProcessedEnd > 0) {
+            buffer.delete(0, lastProcessedEnd)
+        } else if (!final && buffer.length > 8192) {
+            val keepFrom = (buffer.length - 4096).coerceAtLeast(0)
+            buffer.delete(0, keepFrom)
+        }
+        return imported
     }
 
     private fun prefBoolean(key: String, default: Boolean): Boolean = prefs.getBoolean(key, default)
@@ -1166,6 +1213,7 @@ class MainActivity : AppCompatActivity() {
         private const val HOME_URL_DEFAULT = "https://html.duckduckgo.com/html"
         private const val BOOKMARK_DELIMITER = "||"
         private const val MAX_HISTORY = 100
+        private val HTML_LINK_REGEX = Regex("<A\\s+[^>]*HREF\\s*=\\s*\\\"([^\\\"]+)\\\"[^>]*>(.*?)</A>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
         private val SCHEME_REGEX = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://")
     }
 }
