@@ -52,9 +52,20 @@ import org.json.JSONArray
 import org.json.JSONObject
 import android.text.Html
 import android.text.TextUtils
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.ImageView
+import java.io.File
 
 class MainActivity : AppCompatActivity() {
 
@@ -67,7 +78,8 @@ class MainActivity : AppCompatActivity() {
         var url: String = "",
         var isLoading: Boolean = false,
         var canGoBack: Boolean = false,
-        var canGoForward: Boolean = false
+        var canGoForward: Boolean = false,
+        var faviconDrawable: Drawable? = null
     )
 
     private lateinit var binding: ActivityMainBinding
@@ -81,7 +93,18 @@ class MainActivity : AppCompatActivity() {
     private lateinit var desktopUserAgent: String
 
     private lateinit var searchEngines: List<SearchEngine>
-    private val historyEntries = mutableListOf<Pair<String, String>>()
+    private data class HistoryEntry(val title: String, val url: String, val timestamp: Long)
+    private data class BookmarkEntry(val title: String, val url: String, val iconPath: String?)
+    private data class DialogEntry(val title: String, val subtitle: String, val icon: Drawable?)
+    private data class SuggestionItem(val display: String, val secondary: String?, val url: String, val icon: Drawable?, val type: SuggestionType)
+    private enum class SuggestionType { HISTORY, BOOKMARK }
+
+    private val historyEntries = mutableListOf<HistoryEntry>()
+    private val faviconDir: File by lazy { File(filesDir, "favicons").apply { mkdirs() } }
+    private val faviconCache = mutableMapOf<String, Drawable?>()
+    private val defaultFavicon by lazy { ContextCompat.getDrawable(this, R.drawable.ic_site_default) }
+    private lateinit var suggestionAdapter: SuggestionAdapter
+    private var bookmarkCache: List<BookmarkEntry>? = null
 
     private val fileChooserLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -123,6 +146,11 @@ class MainActivity : AppCompatActivity() {
 
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         CookieManager.getInstance().setAcceptCookie(true)
+
+        suggestionAdapter = SuggestionAdapter(this)
+        binding.urlBar.setAdapter(suggestionAdapter)
+        binding.urlBar.threshold = 1
+        binding.urlBar.setDropDownBackgroundResource(android.R.color.white)
 
         searchEngines = buildSearchEngines()
         setupUiListeners()
@@ -185,7 +213,18 @@ class MainActivity : AppCompatActivity() {
         binding.urlBar.addTextChangedListener {
             if (!ignoreUrlCallbacks) {
                 updateBookmarkIcon()
+                updateSuggestions(it?.toString().orEmpty())
+            } else {
+                suggestionAdapter.update(emptyList())
             }
+        }
+        binding.urlBar.setOnItemClickListener { _, _, position, _ ->
+            val item = suggestionAdapter.getItem(position) ?: return@setOnItemClickListener
+            ignoreUrlCallbacks = true
+            binding.urlBar.setText(item.url)
+            binding.urlBar.setSelection(item.url.length)
+            ignoreUrlCallbacks = false
+            loadInActiveTab(item.url)
         }
         binding.urlBar.setOnEditorActionListener { _, actionId, _ ->
             if (actionId == EditorInfo.IME_ACTION_GO) {
@@ -348,6 +387,18 @@ class MainActivity : AppCompatActivity() {
                 }
             }
 
+            override fun onReceivedIcon(view: WebView?, icon: Bitmap?) {
+                if (icon == null) return
+                val url = view?.url ?: tab.url
+                val host = hostFromUrl(url) ?: return
+                val drawable = saveFavicon(host, icon)
+                tab.faviconDrawable = drawable
+                updateTabChipSelection()
+                if (tab.id == activeTabId) {
+                    updateBookmarkIcon()
+                }
+            }
+
             override fun onShowFileChooser(
                 webView: WebView?,
                 filePathCallback: ValueCallback<Array<Uri>>?,
@@ -409,6 +460,8 @@ class MainActivity : AppCompatActivity() {
                     updateReloadButton(false)
                     updateBookmarkIcon()
                 }
+                tab.faviconDrawable = loadDrawableForUrl(tab.url) ?: tab.faviconDrawable
+                updateTabChipSelection()
                 val historyTitle = view?.title?.takeIf { !it.isNullOrBlank() }?.toString()
                     ?: tab.title.takeIf { it.isNotBlank() }
                     ?: getHostForStatus(tab.url)
@@ -482,6 +535,9 @@ class MainActivity : AppCompatActivity() {
         chip.isChecked = tab.id == activeTabId
         chip.isCloseIconVisible = tabs.size > 1
         chip.closeIcon = AppCompatResources.getDrawable(this, R.drawable.ic_close)
+        chip.chipIcon = tab.faviconDrawable ?: defaultFavicon
+        chip.isChipIconVisible = true
+        chip.chipIconTint = null
         chip.setOnClickListener { selectTab(tab.id) }
         chip.setOnCloseIconClickListener { closeTab(tab.id) }
         chip.tag = tab.id
@@ -496,6 +552,9 @@ class MainActivity : AppCompatActivity() {
             chip.text = tab.title.takeIf { it.isNotBlank() } ?: getString(R.string.default_tab_title)
             chip.isCloseIconVisible = tabs.size > 1
             chip.isChecked = tab.id == current
+            chip.chipIcon = tab.faviconDrawable ?: defaultFavicon
+            chip.chipIconTint = null
+            chip.isChipIconVisible = true
             if (chip.isChecked) {
                 binding.tabScroll.post { binding.tabScroll.smoothScrollTo(chip.left, 0) }
             }
@@ -524,6 +583,7 @@ class MainActivity : AppCompatActivity() {
     private fun submitUrlFromBar() {
         val input = binding.urlBar.text?.toString().orEmpty()
         val target = buildTargetForInput(input) ?: return
+        binding.urlBar.dismissDropDown()
         loadInActiveTab(target)
     }
 
@@ -563,15 +623,14 @@ class MainActivity : AppCompatActivity() {
             messageRes = R.string.bookmark_removed
         } else {
             val title = tab.title.takeIf { it.isNotBlank() } ?: getHostForStatus(url)
-            val entry = JSONObject().apply {
-                put("title", title)
-                put("url", url)
-            }.toString()
-            raw.add(entry)
+            raw.add(buildBookmarkRecord(title, url))
             messageRes = R.string.bookmark_added
         }
         saveBookmarksRaw(raw)
         updateBookmarkIcon()
+        if (binding.urlBar.hasFocus()) {
+            updateSuggestions(binding.urlBar.text?.toString().orEmpty())
+        }
         Toast.makeText(this, getString(messageRes), Toast.LENGTH_SHORT).show()
         updateNavigationState()
     }
@@ -585,6 +644,49 @@ class MainActivity : AppCompatActivity() {
         binding.btnBookmark.setImageDrawable(AppCompatResources.getDrawable(this, icon))
     }
 
+    private fun updateSuggestions(query: String) {
+        val trimmed = query.trim()
+        if (trimmed.isEmpty()) {
+            suggestionAdapter.update(emptyList())
+            binding.urlBar.dismissDropDown()
+            return
+        }
+        val lower = trimmed.lowercase()
+        val suggestions = mutableListOf<SuggestionItem>()
+        val seen = mutableSetOf<String>()
+
+        for (entry in historyEntries.asReversed()) {
+            if (entry.title.contains(lower, ignoreCase = true) || entry.url.contains(lower, ignoreCase = true)) {
+                if (seen.add(entry.url)) {
+                    val display = "${entry.url} (history)"
+                    val icon = loadDrawableForUrl(entry.url) ?: defaultFavicon
+                    suggestions.add(SuggestionItem(display, entry.title, entry.url, icon, SuggestionType.HISTORY))
+                    if (suggestions.size >= 10) break
+                }
+            }
+        }
+
+        if (suggestions.size < 10) {
+            for (bookmark in bookmarkEntries()) {
+                if (bookmark.title.contains(lower, ignoreCase = true) || bookmark.url.contains(lower, ignoreCase = true)) {
+                    if (seen.add(bookmark.url)) {
+                        val display = "${bookmark.url} (bookmark)"
+                        val icon = loadDrawableForBookmark(bookmark)
+                        suggestions.add(SuggestionItem(display, bookmark.title, bookmark.url, icon, SuggestionType.BOOKMARK))
+                        if (suggestions.size >= 10) break
+                    }
+                }
+            }
+        }
+
+        suggestionAdapter.update(suggestions)
+        if (suggestions.isNotEmpty() && binding.urlBar.hasFocus()) {
+            binding.urlBar.showDropDown()
+        } else {
+            binding.urlBar.dismissDropDown()
+        }
+    }
+
     private fun updateReloadButton(isLoading: Boolean) {
         val icon = if (isLoading) R.drawable.ic_close else R.drawable.ic_refresh
         binding.btnReload.setImageDrawable(AppCompatResources.getDrawable(this, icon))
@@ -596,7 +698,7 @@ class MainActivity : AppCompatActivity() {
         val canGoBack = tab?.webView?.canGoBack() == true
         val canGoForward = tab?.webView?.canGoForward() == true
         val hasTab = tab != null
-        val hasBookmarks = loadBookmarksRaw().isNotEmpty()
+        val hasBookmarks = bookmarkEntries().isNotEmpty()
         binding.btnBack.isEnabled = canGoBack
         binding.btnForward.isEnabled = canGoForward
         binding.btnReload.isEnabled = hasTab
@@ -611,6 +713,7 @@ class MainActivity : AppCompatActivity() {
         binding.urlBar.setText(url)
         binding.urlBar.setSelection(binding.urlBar.text?.length ?: 0)
         ignoreUrlCallbacks = false
+        binding.urlBar.dismissDropDown()
     }
 
     private fun updateStatus(text: String) {
@@ -707,7 +810,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnExportBookmarks.setOnClickListener {
-            if (loadBookmarksList().isEmpty()) {
+            if (bookmarkEntries().isEmpty()) {
                 Toast.makeText(this, getString(R.string.bookmarks_export_none), Toast.LENGTH_SHORT).show()
             } else {
                 val suggested = "surfscape-bookmarks-${System.currentTimeMillis() / 1000}.html"
@@ -802,9 +905,11 @@ class MainActivity : AppCompatActivity() {
         val view = layoutInflater.inflate(R.layout.dialog_list, null)
         val recycler = view.findViewById<RecyclerView>(R.id.listRecycler)
         recycler.layoutManager = LinearLayoutManager(this)
-        val items = historyEntries.asReversed()
-        recycler.adapter = DialogListAdapter(items) { entry ->
-            loadInActiveTab(entry.second)
+        val entries = historyEntries.asReversed().map {
+            DialogEntry(it.title, it.url, loadDrawableForUrl(it.url) ?: defaultFavicon)
+        }
+        recycler.adapter = DialogListAdapter(entries) { entry ->
+            loadInActiveTab(entry.subtitle)
         }
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.history_title)
@@ -820,7 +925,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun showBookmarksDialog() {
-        val entries = loadBookmarksList()
+        val entries = bookmarkEntries()
         if (entries.isEmpty()) {
             Toast.makeText(this, getString(R.string.bookmarks_empty), Toast.LENGTH_SHORT).show()
             return
@@ -828,8 +933,11 @@ class MainActivity : AppCompatActivity() {
         val view = layoutInflater.inflate(R.layout.dialog_list, null)
         val recycler = view.findViewById<RecyclerView>(R.id.listRecycler)
         recycler.layoutManager = LinearLayoutManager(this)
-        recycler.adapter = DialogListAdapter(entries) { entry ->
-            loadInActiveTab(entry.second)
+        val dialogEntries = entries.map {
+            DialogEntry(it.title, it.url, loadDrawableForBookmark(it) ?: defaultFavicon)
+        }
+        recycler.adapter = DialogListAdapter(dialogEntries) { entry ->
+            loadInActiveTab(entry.subtitle)
         }
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.bookmarks_title)
@@ -845,6 +953,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun saveBookmarksRaw(raw: Set<String>) {
         prefs.edit().putStringSet(KEY_BOOKMARKS, HashSet(raw)).apply()
+        invalidateBookmarkCache()
     }
 
     private fun findBookmarkEntry(url: String, entries: Set<String>): String? {
@@ -867,40 +976,34 @@ class MainActivity : AppCompatActivity() {
         return null
     }
 
-    private fun parseBookmarkEntry(entry: String): Pair<String, String> {
+    private fun parseBookmarkEntry(entry: String): BookmarkEntry {
         return when {
             entry.startsWith("{") -> {
                 try {
                     val obj = JSONObject(entry)
                     val url = obj.optString("url")
                     val title = obj.optString("title", getHostForStatus(url))
-                    title to url
+                    val icon = obj.optString("icon", null)
+                    BookmarkEntry(title, url, icon.takeIf { !it.isNullOrBlank() })
                 } catch (_: Exception) {
                     val url = entry
-                    getHostForStatus(url) to url
+                    BookmarkEntry(getHostForStatus(url), url, getFaviconPathForUrl(url))
                 }
             }
             entry.contains(BOOKMARK_DELIMITER) -> {
                 val parts = entry.split(BOOKMARK_DELIMITER, limit = 2)
                 val url = parts.getOrNull(1).orEmpty()
                 val title = parts.getOrNull(0)?.takeIf { it.isNotBlank() } ?: getHostForStatus(url)
-                title to url
+                BookmarkEntry(title, url, getFaviconPathForUrl(url))
             }
-            else -> getHostForStatus(entry) to entry
+            else -> BookmarkEntry(getHostForStatus(entry), entry, getFaviconPathForUrl(entry))
         }
-    }
-
-    private fun loadBookmarksList(): List<Pair<String, String>> {
-        return loadBookmarksRaw()
-            .map { parseBookmarkEntry(it) }
-            .filter { it.second.isNotBlank() }
-            .sortedBy { it.first.lowercase() }
     }
 
     private fun recordHistory(title: String, url: String) {
         if (url.isBlank() || url.startsWith("about:")) return
-        historyEntries.removeAll { it.second == url }
-        historyEntries.add(title to url)
+        historyEntries.removeAll { it.url == url }
+        historyEntries.add(HistoryEntry(title, url, System.currentTimeMillis()))
         if (MAX_HISTORY != Int.MAX_VALUE && historyEntries.size > MAX_HISTORY) {
             historyEntries.subList(0, historyEntries.size - MAX_HISTORY).clear()
         }
@@ -910,10 +1013,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun saveHistory() {
         val array = JSONArray()
-        historyEntries.forEach { (title, url) ->
+        historyEntries.forEach { entry ->
             val obj = JSONObject()
-            obj.put("title", title)
-            obj.put("url", url)
+            obj.put("title", entry.title)
+            obj.put("url", entry.url)
+            obj.put("timestamp", entry.timestamp)
             array.put(obj)
         }
         prefs.edit().putString(KEY_HISTORY, array.toString()).apply()
@@ -929,7 +1033,8 @@ class MainActivity : AppCompatActivity() {
                 val url = obj.optString("url")
                 if (url.isNullOrBlank()) continue
                 val title = obj.optString("title", getHostForStatus(url))
-                historyEntries.add(title to url)
+                val timestamp = obj.optLong("timestamp", System.currentTimeMillis())
+                historyEntries.add(HistoryEntry(title, url, timestamp))
             }
         } catch (_: Exception) {
             historyEntries.clear()
@@ -973,7 +1078,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun exportBookmarksToUri(uri: Uri) {
-        val entries = loadBookmarksList()
+        val entries = bookmarkEntries()
         try {
             contentResolver.openOutputStream(uri)?.use { output ->
                 output.bufferedWriter(Charsets.UTF_8).use { writer ->
@@ -984,9 +1089,9 @@ class MainActivity : AppCompatActivity() {
                     writer.appendLine("<TITLE>Surfscape Bookmarks</TITLE>")
                     writer.appendLine("<H1>Surfscape Bookmarks</H1>")
                     writer.appendLine("<DL><p>")
-                    entries.forEach { (title, url) ->
-                        val safeUrl = escapeHtml(url)
-                        val safeTitle = escapeHtml(title)
+                    entries.forEach { entry ->
+                        val safeUrl = escapeHtml(entry.url)
+                        val safeTitle = escapeHtml(entry.title)
                         writer.append("    <DT><A HREF=\"")
                         writer.append(safeUrl)
                         writer.append("\" ADD_DATE=\"")
@@ -1042,6 +1147,9 @@ class MainActivity : AppCompatActivity() {
                     else -> {
                         updateBookmarkIcon()
                         updateNavigationState()
+                        if (binding.urlBar.hasFocus()) {
+                            updateSuggestions(binding.urlBar.text?.toString().orEmpty())
+                        }
                         Toast.makeText(this@MainActivity, getString(R.string.bookmarks_import_success), Toast.LENGTH_SHORT).show()
                     }
                 }
@@ -1066,11 +1174,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (url.isBlank()) continue
                 findBookmarkEntry(url, target)?.let { target.remove(it) }
-                val stored = JSONObject().apply {
-                    put("title", title)
-                    put("url", url)
-                }.toString()
-                target.add(stored)
+                val icon = (element as? JSONObject)?.optString("icon", null)
+                target.add(buildBookmarkRecord(title, url, icon))
                 imported++
             }
             imported
@@ -1129,11 +1234,7 @@ class MainActivity : AppCompatActivity() {
             if (url.isNotBlank()) {
                 val title = htmlToPlain(titleHtml).ifBlank { getHostForStatus(url) }
                 findBookmarkEntry(url, raw)?.let { raw.remove(it) }
-                val stored = JSONObject().apply {
-                    put("title", title)
-                    put("url", url)
-                }.toString()
-                raw.add(stored)
+                raw.add(buildBookmarkRecord(title, url))
                 imported++
             }
             lastProcessedEnd = end
@@ -1148,12 +1249,95 @@ class MainActivity : AppCompatActivity() {
         return imported
     }
 
+    private fun buildBookmarkRecord(title: String, url: String, providedIcon: String? = null): String {
+        val obj = JSONObject()
+        obj.put("title", title)
+        obj.put("url", url)
+        val iconPath = providedIcon?.takeIf { it.isNotBlank() } ?: getFaviconPathForUrl(url)
+        iconPath?.let { obj.put("icon", it) }
+        return obj.toString()
+    }
+
+    private fun bookmarkEntries(): List<BookmarkEntry> {
+        bookmarkCache?.let { return it }
+        val list = loadBookmarksRaw()
+            .map { parseBookmarkEntry(it) }
+            .filter { it.url.isNotBlank() }
+            .sortedBy { it.title.lowercase() }
+        bookmarkCache = list
+        return list
+    }
+
+    private fun invalidateBookmarkCache() {
+        bookmarkCache = null
+    }
+
+    private fun loadDrawableForBookmark(entry: BookmarkEntry): Drawable? {
+        return loadDrawableForPath(entry.iconPath) ?: loadDrawableForUrl(entry.url) ?: defaultFavicon
+    }
+
+    private fun loadDrawableForPath(path: String?): Drawable? {
+        if (path.isNullOrBlank()) return null
+        val file = File(path)
+        if (!file.exists()) return null
+        val bitmap = BitmapFactory.decodeFile(file.path) ?: return null
+        return BitmapDrawable(resources, bitmap)
+    }
+
+    private fun loadDrawableForUrl(url: String): Drawable? {
+        val host = hostFromUrl(url) ?: return null
+        return loadFaviconDrawable(host)
+    }
+
+    private fun saveFavicon(host: String, bitmap: Bitmap): Drawable {
+        val file = faviconFile(host)
+        try {
+            file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+        } catch (_: Exception) {
+            // ignore write failures
+        }
+        val drawable = BitmapDrawable(resources, bitmap)
+        faviconCache[host] = drawable
+        return drawable
+    }
+
+    private fun getFaviconPathForUrl(url: String): String? {
+        val host = hostFromUrl(url) ?: return null
+        val file = faviconFile(host)
+        return if (file.exists()) file.path else null
+    }
+
+    private fun loadFaviconDrawable(host: String): Drawable? {
+        faviconCache[host]?.let { return it }
+        val file = faviconFile(host)
+        if (!file.exists()) return null
+        val bitmap = BitmapFactory.decodeFile(file.path) ?: return null
+        val drawable = BitmapDrawable(resources, bitmap)
+        faviconCache[host] = drawable
+        return drawable
+    }
+
+    private fun hostFromUrl(url: String?): String? {
+        if (url.isNullOrBlank()) return null
+        return try {
+            Uri.parse(url)?.host?.lowercase()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun faviconFile(host: String): File {
+        val safe = host.replace("[^a-z0-9._-]".toRegex(), "_")
+        return File(faviconDir, "$safe.png")
+    }
+
     private inner class DialogListAdapter(
-        private val items: List<Pair<String, String>>,
-        private val onClick: (Pair<String, String>) -> Unit
+        private val items: List<DialogEntry>,
+        private val onClick: (DialogEntry) -> Unit
     ) : RecyclerView.Adapter<DialogListAdapter.ViewHolder>() {
 
         inner class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+            val icon: ImageView = view.findViewById(R.id.itemIcon)
             val title: TextView = view.findViewById(R.id.itemTitle)
             val subtitle: TextView = view.findViewById(R.id.itemSubtitle)
         }
@@ -1166,12 +1350,53 @@ class MainActivity : AppCompatActivity() {
 
         override fun onBindViewHolder(holder: ViewHolder, position: Int) {
             val entry = items[position]
-            holder.title.text = entry.first
-            holder.subtitle.text = entry.second
+            holder.title.text = entry.title
+            holder.subtitle.text = entry.subtitle
+            holder.icon.setImageDrawable(entry.icon ?: defaultFavicon)
             holder.itemView.setOnClickListener { onClick(entry) }
         }
 
         override fun getItemCount(): Int = items.size
+    }
+
+    private inner class SuggestionAdapter(context: Context) : ArrayAdapter<SuggestionItem>(context, 0, mutableListOf()) {
+        private val items = mutableListOf<SuggestionItem>()
+
+        fun update(newItems: List<SuggestionItem>) {
+            items.clear()
+            items.addAll(newItems)
+            notifyDataSetChanged()
+        }
+
+        override fun getCount(): Int = items.size
+
+        override fun getItem(position: Int): SuggestionItem? = items.getOrNull(position)
+
+        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+            return bindView(position, convertView, parent)
+        }
+
+        override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View {
+            return bindView(position, convertView, parent)
+        }
+
+        private fun bindView(position: Int, convertView: View?, parent: ViewGroup): View {
+            val view = convertView ?: LayoutInflater.from(parent.context)
+                .inflate(R.layout.item_suggestion, parent, false)
+            val title = view.findViewById<TextView>(R.id.suggestionTitle)
+            val subtitle = view.findViewById<TextView>(R.id.suggestionSubtitle)
+            val icon = view.findViewById<ImageView>(R.id.suggestionIcon)
+            val item = items[position]
+            title.text = item.display
+            if (item.secondary.isNullOrBlank()) {
+                subtitle.visibility = View.GONE
+            } else {
+                subtitle.text = item.secondary
+                subtitle.visibility = View.VISIBLE
+            }
+            icon.setImageDrawable(item.icon ?: defaultFavicon)
+            return view
+        }
     }
 
     private fun prefBoolean(key: String, default: Boolean): Boolean = prefs.getBoolean(key, default)

@@ -47,13 +47,16 @@
                     app:endIconTint="@android:color/white"
                     app:hintTextColor="@android:color/white">
 
-                    <com.google.android.material.textfield.TextInputEditText
+                    <com.google.android.material.textfield.MaterialAutoCompleteTextView
                         android:id="@+id/urlBar"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:imeOptions="actionGo"
                         android:inputType="textUri"
                         android:maxLines="1"
+                        android:completionThreshold="1"
+                        android:dropDownHeight="wrap_content"
+                        android:dropDownWidth="match_parent"
                         android:textColor="@android:color/white"
                         android:textColorHint="@android:color/white" />
                 </com.google.android.material.textfield.TextInputLayout>
