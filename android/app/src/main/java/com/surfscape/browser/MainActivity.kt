@@ -46,6 +46,7 @@ import java.util.LinkedHashSet
 import java.util.concurrent.atomic.AtomicLong
 import org.json.JSONArray
 import org.json.JSONObject
+import android.text.Html
 
 class MainActivity : AppCompatActivity() {
 
@@ -694,14 +695,14 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnImportBookmarks.setOnClickListener {
-            importBookmarksLauncher.launch(arrayOf("application/json", "text/*"))
+            importBookmarksLauncher.launch(arrayOf("text/html", "application/json", "text/*"))
         }
 
         btnExportBookmarks.setOnClickListener {
             if (loadBookmarksList().isEmpty()) {
                 Toast.makeText(this, getString(R.string.bookmarks_export_none), Toast.LENGTH_SHORT).show()
             } else {
-                val suggested = "surfscape-bookmarks-${System.currentTimeMillis() / 1000}.json"
+                val suggested = "surfscape-bookmarks-${System.currentTimeMillis() / 1000}.html"
                 exportBookmarksLauncher.launch(suggested)
             }
         }
@@ -964,14 +965,25 @@ class MainActivity : AppCompatActivity() {
         try {
             contentResolver.openOutputStream(uri)?.use { output ->
                 output.bufferedWriter(Charsets.UTF_8).use { writer ->
-                    val array = JSONArray()
+                    val now = System.currentTimeMillis() / 1000
+                    writer.appendLine("<!DOCTYPE NETSCAPE-Bookmark-file-1>")
+                    writer.appendLine("<!-- This is an automatically generated file. -->")
+                    writer.appendLine("<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html; charset=UTF-8\">")
+                    writer.appendLine("<TITLE>Surfscape Bookmarks</TITLE>")
+                    writer.appendLine("<H1>Surfscape Bookmarks</H1>")
+                    writer.appendLine("<DL><p>")
                     entries.forEach { (title, url) ->
-                        val obj = JSONObject()
-                        obj.put("title", title)
-                        obj.put("url", url)
-                        array.put(obj)
+                        val safeUrl = Html.escapeHtml(url)
+                        val safeTitle = Html.escapeHtml(title)
+                        writer.append("    <DT><A HREF=\"")
+                        writer.append(safeUrl)
+                        writer.append("\" ADD_DATE=\"")
+                        writer.append(now.toString())
+                        writer.append("\">")
+                        writer.append(safeTitle)
+                        writer.appendLine("</A>")
                     }
-                    writer.write(array.toString(2))
+                    writer.appendLine("</DL><p>")
                     writer.flush()
                 }
             } ?: throw IllegalStateException("No output stream")
@@ -983,11 +995,35 @@ class MainActivity : AppCompatActivity() {
 
     private fun importBookmarksFromUri(uri: Uri) {
         try {
-            val json = contentResolver.openInputStream(uri)?.use { stream ->
+            val content = contentResolver.openInputStream(uri)?.use { stream ->
                 stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
             } ?: throw IllegalStateException("Empty file")
-            val array = JSONArray(json)
+            val trimmed = content.trimStart()
             val raw = loadBookmarksRaw()
+            val imported = when {
+                trimmed.startsWith("[") || trimmed.startsWith("{") -> importBookmarksJson(trimmed, raw)
+                else -> importBookmarksHtml(content, raw)
+            }
+            when {
+                imported < 0 -> {
+                    Toast.makeText(this, getString(R.string.bookmarks_import_failed), Toast.LENGTH_SHORT).show()
+                }
+                imported == 0 -> Toast.makeText(this, getString(R.string.bookmarks_import_none), Toast.LENGTH_SHORT).show()
+                else -> {
+                    saveBookmarksRaw(raw)
+                    updateBookmarkIcon()
+                    updateNavigationState()
+                    Toast.makeText(this, getString(R.string.bookmarks_import_success), Toast.LENGTH_SHORT).show()
+                }
+            }
+        } catch (t: Throwable) {
+            Toast.makeText(this, getString(R.string.bookmarks_import_failed), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun importBookmarksJson(content: String, raw: MutableSet<String>): Int {
+        return try {
+            val array = JSONArray(content)
             var imported = 0
             for (i in 0 until array.length()) {
                 val element = array.get(i)
@@ -1009,16 +1045,41 @@ class MainActivity : AppCompatActivity() {
                 raw.add(stored)
                 imported++
             }
-            if (imported == 0) {
-                Toast.makeText(this, getString(R.string.bookmarks_import_none), Toast.LENGTH_SHORT).show()
-                return
+            imported
+        } catch (_: Exception) {
+            -1
+        }
+    }
+
+    private fun importBookmarksHtml(content: String, raw: MutableSet<String>): Int {
+        val regex = Regex("<A\\s+[^>]*HREF\\s*=\\s*\"([^\"]+)\"[^>]*>(.*?)</A>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        var imported = 0
+        try {
+            regex.findAll(content).forEach { match ->
+                val url = match.groupValues.getOrNull(1)?.trim().orEmpty()
+                if (url.isBlank()) return@forEach
+                val titleHtml = match.groupValues.getOrNull(2)?.trim().orEmpty()
+                val title = htmlToPlain(titleHtml).ifBlank { getHostForStatus(url) }
+                findBookmarkEntry(url, raw)?.let { raw.remove(it) }
+                val stored = JSONObject().apply {
+                    put("title", title)
+                    put("url", url)
+                }.toString()
+                raw.add(stored)
+                imported++
             }
-            saveBookmarksRaw(raw)
-            updateBookmarkIcon()
-            updateNavigationState()
-            Toast.makeText(this, getString(R.string.bookmarks_import_success), Toast.LENGTH_SHORT).show()
-        } catch (t: Throwable) {
-            Toast.makeText(this, getString(R.string.bookmarks_import_failed), Toast.LENGTH_SHORT).show()
+        } catch (_: Exception) {
+            return -1
+        }
+        return imported
+    }
+
+    private fun htmlToPlain(text: String): String {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            Html.fromHtml(text, Html.FROM_HTML_MODE_LEGACY).toString().trim()
+        } else {
+            @Suppress("DEPRECATION")
+            Html.fromHtml(text).toString().trim()
         }
     }
 

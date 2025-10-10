@@ -55,7 +55,8 @@
         android:text="@string/settings_section_appearance"
         android:textAppearance="?attr/textAppearanceHeadlineSmall"
         android:textStyle="bold"
-        android:textColor="@android:color/black" />
+        android:textColor="@android:color/black"
+        android:textSize="22sp" />
 
     <com.google.android.material.switchmaterial.SwitchMaterial
         android:id="@+id/switchDarkMode"
@@ -110,7 +111,8 @@
         android:text="@string/settings_section_privacy"
         android:textAppearance="?attr/textAppearanceHeadlineSmall"
         android:textStyle="bold"
-        android:textColor="@android:color/black" />
+        android:textColor="@android:color/black"
+        android:textSize="22sp" />
 
     <com.google.android.material.switchmaterial.SwitchMaterial
         android:id="@+id/switchJavascript"
@@ -162,7 +164,8 @@
         android:text="@string/settings_section_behavior"
         android:textAppearance="?attr/textAppearanceHeadlineSmall"
         android:textStyle="bold"
-        android:textColor="@android:color/black" />
+        android:textColor="@android:color/black"
+        android:textSize="22sp" />
 
     <com.google.android.material.switchmaterial.SwitchMaterial
         android:id="@+id/switchDesktopMode"
@@ -206,7 +209,8 @@
         android:text="@string/settings_section_bookmarks"
         android:textAppearance="?attr/textAppearanceHeadlineSmall"
         android:textStyle="bold"
-        android:textColor="@android:color/black" />
+        android:textColor="@android:color/black"
+        android:textSize="22sp" />
 
     <com.google.android.material.button.MaterialButton
         android:id="@+id/btnImportBookmarks"
