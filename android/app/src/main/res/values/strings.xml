@@ -33,4 +33,12 @@
     <string name="status_error">Unable to load page</string>
     <string name="opening_external">Opening with another app…</string>
     <string name="no_app_found">No compatible app installed to open this link.</string>
+    <string name="settings_enable_js">Enable JavaScript</string>
+    <string name="settings_dark_mode">Auto darken websites</string>
+    <string name="settings_desktop_mode">Request desktop sites</string>
+    <string name="settings_block_images">Block images</string>
+    <string name="settings_third_party_cookies">Allow third-party cookies</string>
+    <string name="settings_safe_browsing">Enable Safe Browsing</string>
+    <string name="settings_allow_autoplay">Allow media autoplay</string>
+    <string name="settings_clear_on_exit">Clear browsing data on exit</string>
 </resources>

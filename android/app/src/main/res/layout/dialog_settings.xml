@@ -39,4 +39,71 @@
             android:inputType="text" />
     </com.google.android.material.textfield.TextInputLayout>
 
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="12dp" />
+
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switchDarkMode"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/settings_dark_mode"
+        android:textAppearance="?attr/textAppearanceBodyLarge" />
+
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switchJavascript"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/settings_enable_js"
+        android:textAppearance="?attr/textAppearanceBodyLarge" />
+
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switchDesktopMode"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/settings_desktop_mode"
+        android:textAppearance="?attr/textAppearanceBodyLarge" />
+
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switchBlockImages"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/settings_block_images"
+        android:textAppearance="?attr/textAppearanceBodyLarge" />
+
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switchThirdPartyCookies"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/settings_third_party_cookies"
+        android:textAppearance="?attr/textAppearanceBodyLarge" />
+
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switchSafeBrowsing"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/settings_safe_browsing"
+        android:textAppearance="?attr/textAppearanceBodyLarge" />
+
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switchAutoplay"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/settings_allow_autoplay"
+        android:textAppearance="?attr/textAppearanceBodyLarge" />
+
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switchClearOnExit"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/settings_clear_on_exit"
+        android:textAppearance="?attr/textAppearanceBodyLarge" />
+
 </LinearLayout>

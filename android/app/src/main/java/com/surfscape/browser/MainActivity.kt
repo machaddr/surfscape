@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.Patterns
 import android.view.KeyEvent
@@ -18,6 +19,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
+import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ArrayAdapter
@@ -32,6 +34,7 @@ import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 import com.google.android.material.chip.Chip
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.surfscape.browser.databinding.ActivityMainBinding
 import java.net.URLEncoder
@@ -60,6 +63,8 @@ class MainActivity : AppCompatActivity() {
     private var activeTabId: Long? = null
     private var ignoreUrlCallbacks = false
     private var fileChooserCallback: ValueCallback<Array<Uri>>? = null
+    private lateinit var mobileUserAgent: String
+    private lateinit var desktopUserAgent: String
 
     private lateinit var searchEngines: List<SearchEngine>
 
@@ -78,6 +83,10 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        mobileUserAgent = "${WebSettings.getDefaultUserAgent(this)} SurfscapeMobile/${BuildConfig.VERSION_NAME}"
+        desktopUserAgent =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36 SurfscapeDesktop/${BuildConfig.VERSION_NAME}"
 
         setSupportActionBar(binding.topToolbar)
         supportActionBar?.setDisplayShowTitleEnabled(false)
@@ -119,6 +128,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        if (shouldClearOnExit()) {
+            clearBrowsingData()
+        }
         tabs.forEach { tab ->
             (tab.webView.parent as? ViewGroup)?.removeView(tab.webView)
             tab.webView.stopLoading()
@@ -262,25 +274,15 @@ class MainActivity : AppCompatActivity() {
         webView.isFocusableInTouchMode = true
 
         with(webView.settings) {
-            javaScriptEnabled = true
             domStorageEnabled = true
             databaseEnabled = true
-            loadsImagesAutomatically = true
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             builtInZoomControls = true
             displayZoomControls = false
             useWideViewPort = true
             loadWithOverviewMode = true
-            mediaPlaybackRequiresUserGesture = false
             textZoom = 100
-            userAgentString = "${userAgentString} SurfscapeMobile/${BuildConfig.VERSION_NAME}"
         }
-
-        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
-            WebSettingsCompat.setAlgorithmicDarkeningAllowed(webView.settings, true)
-        }
-
-        CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true)
 
         webView.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
@@ -388,6 +390,8 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, getString(R.string.opening_external), Toast.LENGTH_SHORT).show()
             }
         }
+
+        applySettingsToWebView(tab)
     }
 
     private fun selectTab(tabId: Long) {
@@ -587,6 +591,14 @@ class MainActivity : AppCompatActivity() {
         val homepageInput =
             content.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.homepageInput)
         val searchInput = content.findViewById<MaterialAutoCompleteTextView>(R.id.searchEngineInput)
+        val switchDarkMode = content.findViewById<SwitchMaterial>(R.id.switchDarkMode)
+        val switchJavascript = content.findViewById<SwitchMaterial>(R.id.switchJavascript)
+        val switchDesktopMode = content.findViewById<SwitchMaterial>(R.id.switchDesktopMode)
+        val switchBlockImages = content.findViewById<SwitchMaterial>(R.id.switchBlockImages)
+        val switchThirdPartyCookies = content.findViewById<SwitchMaterial>(R.id.switchThirdPartyCookies)
+        val switchSafeBrowsing = content.findViewById<SwitchMaterial>(R.id.switchSafeBrowsing)
+        val switchAutoplay = content.findViewById<SwitchMaterial>(R.id.switchAutoplay)
+        val switchClearOnExit = content.findViewById<SwitchMaterial>(R.id.switchClearOnExit)
 
         homepageInput.setText(homepageUrl())
         val adapter = ArrayAdapter(
@@ -596,6 +608,24 @@ class MainActivity : AppCompatActivity() {
         )
         searchInput.setAdapter(adapter)
         searchInput.setText(currentSearchEngine().label, false)
+
+        val initialDark = prefBoolean(KEY_DARK_MODE, true)
+        val initialJs = prefBoolean(KEY_JS_ENABLED, true)
+        val initialDesktop = prefBoolean(KEY_DESKTOP_MODE, false)
+        val initialBlockImages = prefBoolean(KEY_BLOCK_IMAGES, false)
+        val initialThirdParty = prefBoolean(KEY_THIRD_PARTY_COOKIES, true)
+        val initialSafeBrowsing = prefBoolean(KEY_SAFE_BROWSING, true)
+        val initialAutoplay = prefBoolean(KEY_ALLOW_AUTOPLAY, true)
+        val initialClearOnExit = prefBoolean(KEY_CLEAR_ON_EXIT, false)
+
+        switchDarkMode.isChecked = initialDark
+        switchJavascript.isChecked = initialJs
+        switchDesktopMode.isChecked = initialDesktop
+        switchBlockImages.isChecked = initialBlockImages
+        switchThirdPartyCookies.isChecked = initialThirdParty
+        switchSafeBrowsing.isChecked = initialSafeBrowsing
+        switchAutoplay.isChecked = initialAutoplay
+        switchClearOnExit.isChecked = initialClearOnExit
 
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.settings_title)
@@ -609,10 +639,42 @@ class MainActivity : AppCompatActivity() {
                 }
                 val chosenEngine = searchEngines.firstOrNull { it.label == searchInput.text.toString() }
                     ?: currentSearchEngine()
+                val newDark = switchDarkMode.isChecked
+                val newJs = switchJavascript.isChecked
+                val newDesktop = switchDesktopMode.isChecked
+                val newBlockImages = switchBlockImages.isChecked
+                val newThirdParty = switchThirdPartyCookies.isChecked
+                val newSafeBrowsing = switchSafeBrowsing.isChecked
+                val newAutoplay = switchAutoplay.isChecked
+                val newClearOnExit = switchClearOnExit.isChecked
+
                 prefs.edit()
                     .putString(KEY_HOMEPAGE, normalizedHomepage)
                     .putString(KEY_SEARCH_ENGINE, chosenEngine.id)
+                    .putBoolean(KEY_DARK_MODE, newDark)
+                    .putBoolean(KEY_JS_ENABLED, newJs)
+                    .putBoolean(KEY_DESKTOP_MODE, newDesktop)
+                    .putBoolean(KEY_BLOCK_IMAGES, newBlockImages)
+                    .putBoolean(KEY_THIRD_PARTY_COOKIES, newThirdParty)
+                    .putBoolean(KEY_SAFE_BROWSING, newSafeBrowsing)
+                    .putBoolean(KEY_ALLOW_AUTOPLAY, newAutoplay)
+                    .putBoolean(KEY_CLEAR_ON_EXIT, newClearOnExit)
                     .apply()
+                val requiresReload = initialDark != newDark ||
+                    initialJs != newJs ||
+                    initialDesktop != newDesktop ||
+                    initialBlockImages != newBlockImages ||
+                    initialThirdParty != newThirdParty ||
+                    initialSafeBrowsing != newSafeBrowsing ||
+                    initialAutoplay != newAutoplay
+                applySettingsToAllTabs()
+                if (requiresReload) {
+                    tabs.forEach { tab ->
+                        if (tab.url.isNotBlank()) {
+                            tab.webView.reload()
+                        }
+                    }
+                }
                 Toast.makeText(this, R.string.settings_saved, Toast.LENGTH_SHORT).show()
             }
             .setNegativeButton(R.string.settings_cancel, null)
@@ -623,6 +685,58 @@ class MainActivity : AppCompatActivity() {
         val ordered = LinkedHashSet<String>()
         tabs.mapNotNullTo(ordered) { it.url.takeIf { url -> url.isNotBlank() } }
         prefs.edit().putStringSet(KEY_LAST_SESSION, ordered).apply()
+    }
+
+    private fun applySettingsToAllTabs() {
+        tabs.forEach { applySettingsToWebView(it) }
+        activeTab?.let { updateReloadButton(it.isLoading) }
+    }
+
+    private fun applySettingsToWebView(tab: BrowserTab) {
+        val settings = tab.webView.settings
+        val jsEnabled = prefBoolean(KEY_JS_ENABLED, true)
+        settings.javaScriptEnabled = jsEnabled
+        val blockImages = prefBoolean(KEY_BLOCK_IMAGES, false)
+        settings.loadsImagesAutomatically = !blockImages
+        val desktopMode = prefBoolean(KEY_DESKTOP_MODE, false)
+        settings.userAgentString = if (desktopMode) desktopUserAgent else mobileUserAgent
+        settings.useWideViewPort = true
+        settings.loadWithOverviewMode = desktopMode
+        val allowAutoplay = prefBoolean(KEY_ALLOW_AUTOPLAY, true)
+        settings.mediaPlaybackRequiresUserGesture = !allowAutoplay
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+            WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, prefBoolean(KEY_DARK_MODE, true))
+        }
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.SAFE_BROWSING_ENABLE)) {
+            WebSettingsCompat.setSafeBrowsingEnabled(settings, prefBoolean(KEY_SAFE_BROWSING, true))
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            settings.safeBrowsingEnabled = prefBoolean(KEY_SAFE_BROWSING, true)
+        }
+        CookieManager.getInstance().apply {
+            setAcceptCookie(true)
+            setAcceptThirdPartyCookies(tab.webView, prefBoolean(KEY_THIRD_PARTY_COOKIES, true))
+        }
+    }
+
+    private fun prefBoolean(key: String, default: Boolean): Boolean = prefs.getBoolean(key, default)
+
+    private fun shouldClearOnExit(): Boolean = prefBoolean(KEY_CLEAR_ON_EXIT, false)
+
+    private fun clearBrowsingData() {
+        tabs.forEach { tab ->
+            tab.webView.clearHistory()
+            tab.webView.clearCache(true)
+            tab.webView.clearFormData()
+        }
+        CookieManager.getInstance().apply {
+            removeAllCookies(null)
+            flush()
+        }
+        WebStorage.getInstance().deleteAllData()
+        prefs.edit()
+            .remove(KEY_LAST_SESSION)
+            .remove(KEY_LAST_URL)
+            .apply()
     }
 
     private fun handleExternalUrl(url: String?): Boolean {
@@ -660,6 +774,14 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_HOMEPAGE = "homepage_url"
         private const val KEY_SEARCH_ENGINE = "search_engine"
         private const val KEY_LAST_SESSION = "session_urls"
+        private const val KEY_JS_ENABLED = "js_enabled"
+        private const val KEY_DARK_MODE = "dark_mode"
+        private const val KEY_DESKTOP_MODE = "desktop_mode"
+        private const val KEY_BLOCK_IMAGES = "block_images"
+        private const val KEY_THIRD_PARTY_COOKIES = "third_party_cookies"
+        private const val KEY_SAFE_BROWSING = "safe_browsing"
+        private const val KEY_ALLOW_AUTOPLAY = "allow_autoplay"
+        private const val KEY_CLEAR_ON_EXIT = "clear_on_exit"
         private const val KEY_STATE_URLS = "state_urls"
         private const val KEY_STATE_ACTIVE_INDEX = "state_active_index"
         private const val HOME_URL_DEFAULT = "https://html.duckduckgo.com/html"
