@@ -55,7 +55,6 @@ import android.text.TextUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import android.text.TextUtils
 
 class MainActivity : AppCompatActivity() {
 
