@@ -31,6 +31,9 @@ import androidx.appcompat.content.res.AppCompatResources
 import androidx.core.view.children
 import androidx.core.view.isVisible
 import androidx.core.widget.addTextChangedListener
+import androidx.lifecycle.lifecycleScope
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
 import com.google.android.material.button.MaterialButton
@@ -48,6 +51,10 @@ import java.util.concurrent.atomic.AtomicLong
 import org.json.JSONArray
 import org.json.JSONObject
 import android.text.Html
+import android.text.TextUtils
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import android.text.TextUtils
 
 class MainActivity : AppCompatActivity() {
@@ -793,14 +800,16 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, getString(R.string.history_empty), Toast.LENGTH_SHORT).show()
             return
         }
+        val view = layoutInflater.inflate(R.layout.dialog_list, null)
+        val recycler = view.findViewById<RecyclerView>(R.id.listRecycler)
+        recycler.layoutManager = LinearLayoutManager(this)
         val items = historyEntries.asReversed()
-        val labels = items.map { (title, url) -> "$title\n$url" }.toTypedArray()
+        recycler.adapter = DialogListAdapter(items) { entry ->
+            loadInActiveTab(entry.second)
+        }
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.history_title)
-            .setItems(labels) { _, which ->
-                val entry = items[which]
-                loadInActiveTab(entry.second)
-            }
+            .setView(view)
             .setPositiveButton(R.string.history_clear) { _, _ ->
                 historyEntries.clear()
                 saveHistory()
@@ -817,13 +826,15 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, getString(R.string.bookmarks_empty), Toast.LENGTH_SHORT).show()
             return
         }
-        val labels = entries.map { (title, url) -> "$title\n$url" }.toTypedArray()
+        val view = layoutInflater.inflate(R.layout.dialog_list, null)
+        val recycler = view.findViewById<RecyclerView>(R.id.listRecycler)
+        recycler.layoutManager = LinearLayoutManager(this)
+        recycler.adapter = DialogListAdapter(entries) { entry ->
+            loadInActiveTab(entry.second)
+        }
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.bookmarks_title)
-            .setItems(labels) { _, which ->
-                val entry = entries[which]
-                loadInActiveTab(entry.second)
-            }
+            .setView(view)
             .setNegativeButton(android.R.string.cancel, null)
             .show()
     }
@@ -891,7 +902,7 @@ class MainActivity : AppCompatActivity() {
         if (url.isBlank() || url.startsWith("about:")) return
         historyEntries.removeAll { it.second == url }
         historyEntries.add(title to url)
-        if (historyEntries.size > MAX_HISTORY) {
+        if (MAX_HISTORY != Int.MAX_VALUE && historyEntries.size > MAX_HISTORY) {
             historyEntries.subList(0, historyEntries.size - MAX_HISTORY).clear()
         }
         saveHistory()
@@ -996,42 +1007,50 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun importBookmarksFromUri(uri: Uri) {
-        try {
-            val preview = contentResolver.openInputStream(uri)?.use { input ->
-                val buffer = ByteArray(4096)
-                val read = input.read(buffer)
-                if (read <= 0) "" else String(buffer, 0, read, Charsets.UTF_8)
-            } ?: throw IllegalStateException("Empty file")
-            val trimmed = preview.trimStart()
-            val raw = loadBookmarksRaw()
-            val imported = if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
-                val full = contentResolver.openInputStream(uri)?.use { stream ->
-                    stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                } ?: ""
-                importBookmarksJson(full, raw)
-            } else {
-                contentResolver.openInputStream(uri)?.use { stream ->
-                    importBookmarksHtmlStream(stream, raw)
-                } ?: -1
-            }
-            when {
-                imported < 0 -> {
-                    Toast.makeText(this, getString(R.string.bookmarks_import_failed), Toast.LENGTH_SHORT).show()
+        lifecycleScope.launch(Dispatchers.IO) {
+            val imported = try {
+                val preview = contentResolver.openInputStream(uri)?.use { input ->
+                    val buffer = ByteArray(4096)
+                    val read = input.read(buffer)
+                    if (read <= 0) "" else String(buffer, 0, read, Charsets.UTF_8)
+                } ?: throw IllegalStateException("Empty file")
+                val trimmed = preview.trimStart()
+                val raw = loadBookmarksRaw()
+                val result = if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+                    val full = contentResolver.openInputStream(uri)?.use { stream ->
+                        stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                    } ?: ""
+                    importBookmarksJson(full, raw)
+                } else {
+                    contentResolver.openInputStream(uri)?.use { stream ->
+                        importBookmarksHtmlStream(stream, raw)
+                    } ?: -1
                 }
-                imported == 0 -> Toast.makeText(this, getString(R.string.bookmarks_import_none), Toast.LENGTH_SHORT).show()
-                else -> {
+                if (result > 0) {
                     saveBookmarksRaw(raw)
-                    updateBookmarkIcon()
-                    updateNavigationState()
-                    Toast.makeText(this, getString(R.string.bookmarks_import_success), Toast.LENGTH_SHORT).show()
+                }
+                result
+            } catch (t: Throwable) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@MainActivity, getString(R.string.bookmarks_import_failed), Toast.LENGTH_SHORT).show()
+                }
+                return@launch
+            }
+            withContext(Dispatchers.Main) {
+                when {
+                    imported < 0 -> Toast.makeText(this@MainActivity, getString(R.string.bookmarks_import_failed), Toast.LENGTH_SHORT).show()
+                    imported == 0 -> Toast.makeText(this@MainActivity, getString(R.string.bookmarks_import_none), Toast.LENGTH_SHORT).show()
+                    else -> {
+                        updateBookmarkIcon()
+                        updateNavigationState()
+                        Toast.makeText(this@MainActivity, getString(R.string.bookmarks_import_success), Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
-        } catch (t: Throwable) {
-            Toast.makeText(this, getString(R.string.bookmarks_import_failed), Toast.LENGTH_SHORT).show()
         }
     }
 
-    private fun importBookmarksJson(content: String, raw: MutableSet<String>): Int {
+    private fun importBookmarksJson(content: String, target: MutableSet<String>): Int {
         return try {
             val array = JSONArray(content)
             var imported = 0
@@ -1047,12 +1066,12 @@ class MainActivity : AppCompatActivity() {
                     else -> continue
                 }
                 if (url.isBlank()) continue
-                findBookmarkEntry(url, raw)?.let { raw.remove(it) }
+                findBookmarkEntry(url, target)?.let { target.remove(it) }
                 val stored = JSONObject().apply {
                     put("title", title)
                     put("url", url)
                 }.toString()
-                raw.add(stored)
+                target.add(stored)
                 imported++
             }
             imported
@@ -1128,6 +1147,32 @@ class MainActivity : AppCompatActivity() {
             buffer.delete(0, keepFrom)
         }
         return imported
+    }
+
+    private inner class DialogListAdapter(
+        private val items: List<Pair<String, String>>,
+        private val onClick: (Pair<String, String>) -> Unit
+    ) : RecyclerView.Adapter<DialogListAdapter.ViewHolder>() {
+
+        inner class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+            val title: TextView = view.findViewById(R.id.itemTitle)
+            val subtitle: TextView = view.findViewById(R.id.itemSubtitle)
+        }
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+            val view = LayoutInflater.from(parent.context)
+                .inflate(R.layout.item_dialog_entry, parent, false)
+            return ViewHolder(view)
+        }
+
+        override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+            val entry = items[position]
+            holder.title.text = entry.first
+            holder.subtitle.text = entry.second
+            holder.itemView.setOnClickListener { onClick(entry) }
+        }
+
+        override fun getItemCount(): Int = items.size
     }
 
     private fun prefBoolean(key: String, default: Boolean): Boolean = prefs.getBoolean(key, default)
@@ -1212,7 +1257,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_STATE_ACTIVE_INDEX = "state_active_index"
         private const val HOME_URL_DEFAULT = "https://html.duckduckgo.com/html"
         private const val BOOKMARK_DELIMITER = "||"
-        private const val MAX_HISTORY = 100
+        private const val MAX_HISTORY = Int.MAX_VALUE
         private val HTML_LINK_REGEX = Regex("<A\\s+[^>]*HREF\\s*=\\s*\\\"([^\\\"]+)\\\"[^>]*>(.*?)</A>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
         private val SCHEME_REGEX = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://")
     }
