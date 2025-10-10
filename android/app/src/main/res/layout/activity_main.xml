@@ -77,12 +77,12 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal"
-                android:gravity="center_vertical"
+                android:gravity="center"
                 android:paddingTop="6dp"
                 android:paddingBottom="2dp">
 
                 <ImageButton
-                    android:id="@+id/btnBackTop"
+                    android:id="@+id/btnBack"
                     style="?attr/borderlessButtonStyle"
                     android:layout_width="36dp"
                     android:layout_height="36dp"
@@ -92,7 +92,7 @@
                     android:tint="@android:color/white" />
 
                 <ImageButton
-                    android:id="@+id/btnForwardTop"
+                    android:id="@+id/btnForward"
                     style="?attr/borderlessButtonStyle"
                     android:layout_width="36dp"
                     android:layout_height="36dp"
@@ -102,7 +102,7 @@
                     android:tint="@android:color/white" />
 
                 <ImageButton
-                    android:id="@+id/btnReloadTop"
+                    android:id="@+id/btnReload"
                     style="?attr/borderlessButtonStyle"
                     android:layout_width="36dp"
                     android:layout_height="36dp"
@@ -112,7 +112,7 @@
                     android:tint="@android:color/white" />
 
                 <ImageButton
-                    android:id="@+id/btnHomeTop"
+                    android:id="@+id/btnHome"
                     style="?attr/borderlessButtonStyle"
                     android:layout_width="36dp"
                     android:layout_height="36dp"
@@ -122,7 +122,7 @@
                     android:tint="@android:color/white" />
 
                 <ImageButton
-                    android:id="@+id/btnHistoryTop"
+                    android:id="@+id/btnHistory"
                     style="?attr/borderlessButtonStyle"
                     android:layout_width="36dp"
                     android:layout_height="36dp"
@@ -132,7 +132,7 @@
                     android:tint="@android:color/white" />
 
                 <ImageButton
-                    android:id="@+id/btnSavedTop"
+                    android:id="@+id/btnSaved"
                     style="?attr/borderlessButtonStyle"
                     android:layout_width="36dp"
                     android:layout_height="36dp"
@@ -142,7 +142,7 @@
                     android:tint="@android:color/white" />
 
                 <ImageButton
-                    android:id="@+id/btnBookmarkTop"
+                    android:id="@+id/btnBookmark"
                     style="?attr/borderlessButtonStyle"
                     android:layout_width="36dp"
                     android:layout_height="36dp"
@@ -152,7 +152,7 @@
                     android:tint="@android:color/white" />
 
                 <ImageButton
-                    android:id="@+id/btnAiTop"
+                    android:id="@+id/btnAi"
                     style="?attr/borderlessButtonStyle"
                     android:layout_width="36dp"
                     android:layout_height="36dp"
@@ -162,7 +162,7 @@
                     android:tint="@android:color/white" />
 
                 <ImageButton
-                    android:id="@+id/btnSettingsTop"
+                    android:id="@+id/btnSettings"
                     style="?attr/borderlessButtonStyle"
                     android:layout_width="36dp"
                     android:layout_height="36dp"
@@ -211,13 +211,6 @@
             android:tint="?attr/colorPrimary" />
     </LinearLayout>
 
-    <FrameLayout
-        android:id="@+id/webContainer"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:background="@android:color/white" />
-
     <ProgressBar
         android:id="@+id/progressBar"
         style="@android:style/Widget.ProgressBar.Horizontal"
@@ -226,127 +219,12 @@
         android:max="100"
         android:progress="0"
         android:visibility="gone" />
-
-    <LinearLayout
-        android:id="@+id/bottomBar"
+    <FrameLayout
+        android:id="@+id/webContainer"
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center"
-        android:paddingStart="8dp"
-        android:paddingEnd="8dp"
-        android:paddingTop="10dp"
-        android:paddingBottom="10dp"
-        android:background="?attr/colorPrimary">
-
-        <ImageButton
-            android:id="@+id/btnBack"
-            style="?attr/borderlessButtonStyle"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
-            android:padding="6dp"
-            android:contentDescription="@string/back"
-            android:src="@drawable/ic_arrow_back"
-            android:tint="@android:color/white" />
-
-        <ImageButton
-            android:id="@+id/btnForward"
-            style="?attr/borderlessButtonStyle"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
-            android:padding="6dp"
-            android:contentDescription="@string/forward"
-            android:src="@drawable/ic_arrow_forward"
-            android:tint="@android:color/white" />
-
-        <ImageButton
-            android:id="@+id/btnReload"
-            style="?attr/borderlessButtonStyle"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
-            android:padding="6dp"
-            android:contentDescription="@string/reload"
-            android:src="@drawable/ic_refresh"
-            android:tint="@android:color/white" />
-
-        <ImageButton
-            android:id="@+id/btnHome"
-            style="?attr/borderlessButtonStyle"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
-            android:padding="6dp"
-            android:contentDescription="@string/home"
-            android:src="@drawable/ic_home"
-            android:tint="@android:color/white" />
-
-        <ImageButton
-            android:id="@+id/btnHistory"
-            style="?attr/borderlessButtonStyle"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
-            android:padding="6dp"
-            android:contentDescription="@string/history"
-            android:src="@drawable/ic_history"
-            android:tint="@android:color/white" />
-
-        <ImageButton
-            android:id="@+id/btnSaved"
-            style="?attr/borderlessButtonStyle"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
-            android:padding="6dp"
-            android:contentDescription="@string/bookmarks_saved"
-            android:src="@drawable/ic_bookmarks"
-            android:tint="@android:color/white" />
-
-        <ImageButton
-            android:id="@+id/btnBookmark"
-            style="?attr/borderlessButtonStyle"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
-            android:padding="6dp"
-            android:contentDescription="@string/bookmark"
-            android:src="@drawable/ic_star_border"
-            android:tint="@android:color/white" />
-
-        <ImageButton
-            android:id="@+id/btnAi"
-            style="?attr/borderlessButtonStyle"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
-            android:padding="6dp"
-            android:contentDescription="@string/ai_assistant"
-            android:src="@drawable/ic_spark"
-            android:tint="@android:color/white" />
-
-        <ImageButton
-            android:id="@+id/btnSettings"
-            style="?attr/borderlessButtonStyle"
-            android:layout_width="44dp"
-            android:layout_height="44dp"
-            android:layout_marginStart="4dp"
-            android:layout_marginEnd="4dp"
-            android:padding="6dp"
-            android:contentDescription="@string/settings"
-            android:src="@drawable/ic_settings"
-            android:tint="@android:color/white" />
-    </LinearLayout>
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="@android:color/white" />
 
     <TextView
         android:id="@+id/statusBar"

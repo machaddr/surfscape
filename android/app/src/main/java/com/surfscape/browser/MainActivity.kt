@@ -23,6 +23,7 @@ import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ArrayAdapter
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -32,8 +33,10 @@ import androidx.core.view.isVisible
 import androidx.core.widget.addTextChangedListener
 import androidx.webkit.WebSettingsCompat
 import androidx.webkit.WebViewFeature
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.chip.Chip
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.slider.Slider
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.surfscape.browser.databinding.ActivityMainBinding
@@ -79,6 +82,20 @@ class MainActivity : AppCompatActivity() {
             fileChooserCallback = null
         }
 
+    private val exportBookmarksLauncher =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+            if (uri != null) {
+                exportBookmarksToUri(uri)
+            }
+        }
+
+    private val importBookmarksLauncher =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            if (uri != null) {
+                importBookmarksFromUri(uri)
+            }
+        }
+
     private val activeTab: BrowserTab?
         get() = tabs.firstOrNull { it.id == activeTabId }
 
@@ -100,7 +117,9 @@ class MainActivity : AppCompatActivity() {
 
         searchEngines = buildSearchEngines()
         setupUiListeners()
+        applyUiPreferences()
         loadHistory()
+        updateNavigationState()
 
         if (savedInstanceState != null) {
             restoreFromState(savedInstanceState)
@@ -178,45 +197,29 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnSend.setOnClickListener { submitUrlFromBar() }
 
-        val goBack = {
+        binding.btnBack.setOnClickListener {
             activeTab?.webView?.let { if (it.canGoBack()) it.goBack() }
         }
-        listOf(binding.btnBack, binding.btnBackTop).forEach { it.setOnClickListener { goBack() } }
 
-        val goForward = {
+        binding.btnForward.setOnClickListener {
             activeTab?.webView?.let { if (it.canGoForward()) it.goForward() }
         }
-        listOf(binding.btnForward, binding.btnForwardTop).forEach { it.setOnClickListener { goForward() } }
 
-        val reloadAction = l@{
-            val tab = activeTab ?: return@l
+        binding.btnReload.setOnClickListener {
+            val tab = activeTab ?: return@setOnClickListener
             if (tab.isLoading) {
                 tab.webView.stopLoading()
             } else {
                 tab.webView.reload()
             }
         }
-        listOf(binding.btnReload, binding.btnReloadTop).forEach { button ->
-            button.setOnClickListener { reloadAction() }
-        }
 
-        val homeAction = { loadInActiveTab(homepageUrl()) }
-        listOf(binding.btnHome, binding.btnHomeTop).forEach { it.setOnClickListener { homeAction() } }
-
-        val bookmarkAction = { toggleBookmark() }
-        listOf(binding.btnBookmark, binding.btnBookmarkTop).forEach { it.setOnClickListener { bookmarkAction() } }
-
-        val historyAction = { showHistoryDialog() }
-        listOf(binding.btnHistory, binding.btnHistoryTop).forEach { it.setOnClickListener { historyAction() } }
-
-        val savedAction = { showBookmarksDialog() }
-        listOf(binding.btnSaved, binding.btnSavedTop).forEach { it.setOnClickListener { savedAction() } }
-
-        val aiAction = { showAiPlaceholder() }
-        listOf(binding.btnAi, binding.btnAiTop).forEach { it.setOnClickListener { aiAction() } }
-
-        val settingsAction = { showSettingsDialog() }
-        listOf(binding.btnSettings, binding.btnSettingsTop).forEach { it.setOnClickListener { settingsAction() } }
+        binding.btnHome.setOnClickListener { loadInActiveTab(homepageUrl()) }
+        binding.btnBookmark.setOnClickListener { toggleBookmark() }
+        binding.btnHistory.setOnClickListener { showHistoryDialog() }
+        binding.btnSaved.setOnClickListener { showBookmarksDialog() }
+        binding.btnAi.setOnClickListener { showAiPlaceholder() }
+        binding.btnSettings.setOnClickListener { showSettingsDialog() }
 
         binding.btnNewTab.setOnClickListener {
             val tab = createTab(homepageUrl(), select = true)
@@ -401,6 +404,7 @@ class MainActivity : AppCompatActivity() {
                     ?: tab.title.takeIf { it.isNotBlank() }
                     ?: getHostForStatus(tab.url)
                 recordHistory(historyTitle, tab.url)
+                updateNavigationState()
                 prefs.edit().putString(KEY_LAST_URL, tab.url).apply()
                 persistSession()
             }
@@ -560,6 +564,7 @@ class MainActivity : AppCompatActivity() {
         saveBookmarksRaw(raw)
         updateBookmarkIcon()
         Toast.makeText(this, getString(messageRes), Toast.LENGTH_SHORT).show()
+        updateNavigationState()
     }
 
     private fun updateBookmarkIcon() {
@@ -568,18 +573,13 @@ class MainActivity : AppCompatActivity() {
         val saved = loadBookmarksRaw()
         val hasBookmark = currentUrl.isNotBlank() && findBookmarkEntry(currentUrl, saved) != null
         val icon = if (hasBookmark) R.drawable.ic_star_filled else R.drawable.ic_star_border
-        listOf(binding.btnBookmark, binding.btnBookmarkTop).forEach { button ->
-            button.setImageDrawable(AppCompatResources.getDrawable(this, icon))
-        }
+        binding.btnBookmark.setImageDrawable(AppCompatResources.getDrawable(this, icon))
     }
 
     private fun updateReloadButton(isLoading: Boolean) {
         val icon = if (isLoading) R.drawable.ic_close else R.drawable.ic_refresh
-        val description = getString(if (isLoading) R.string.stop_loading else R.string.reload)
-        listOf(binding.btnReload, binding.btnReloadTop).forEach { button ->
-            button.setImageDrawable(AppCompatResources.getDrawable(this, icon))
-            button.contentDescription = description
-        }
+        binding.btnReload.setImageDrawable(AppCompatResources.getDrawable(this, icon))
+        binding.btnReload.contentDescription = getString(if (isLoading) R.string.stop_loading else R.string.reload)
     }
 
     private fun updateNavigationState() {
@@ -587,11 +587,14 @@ class MainActivity : AppCompatActivity() {
         val canGoBack = tab?.webView?.canGoBack() == true
         val canGoForward = tab?.webView?.canGoForward() == true
         val hasTab = tab != null
-        listOf(binding.btnBack, binding.btnBackTop).forEach { it.isEnabled = canGoBack }
-        listOf(binding.btnForward, binding.btnForwardTop).forEach { it.isEnabled = canGoForward }
-        listOf(binding.btnReload, binding.btnReloadTop).forEach { it.isEnabled = hasTab }
-        listOf(binding.btnHome, binding.btnHomeTop).forEach { it.isEnabled = hasTab }
-        listOf(binding.btnBookmark, binding.btnBookmarkTop).forEach { it.isEnabled = hasTab }
+        val hasBookmarks = loadBookmarksRaw().isNotEmpty()
+        binding.btnBack.isEnabled = canGoBack
+        binding.btnForward.isEnabled = canGoForward
+        binding.btnReload.isEnabled = hasTab
+        binding.btnHome.isEnabled = hasTab
+        binding.btnBookmark.isEnabled = hasTab
+        binding.btnHistory.isEnabled = historyEntries.isNotEmpty()
+        binding.btnSaved.isEnabled = hasBookmarks
     }
 
     private fun updateUrlBar(url: String) {
@@ -636,13 +639,20 @@ class MainActivity : AppCompatActivity() {
             content.findViewById<com.google.android.material.textfield.TextInputEditText>(R.id.homepageInput)
         val searchInput = content.findViewById<MaterialAutoCompleteTextView>(R.id.searchEngineInput)
         val switchDarkMode = content.findViewById<SwitchMaterial>(R.id.switchDarkMode)
+        val switchShowToolbar = content.findViewById<SwitchMaterial>(R.id.switchShowToolbar)
         val switchJavascript = content.findViewById<SwitchMaterial>(R.id.switchJavascript)
         val switchDesktopMode = content.findViewById<SwitchMaterial>(R.id.switchDesktopMode)
         val switchBlockImages = content.findViewById<SwitchMaterial>(R.id.switchBlockImages)
+        val switchEnableZoom = content.findViewById<SwitchMaterial>(R.id.switchEnableZoom)
+        val switchBlockPopups = content.findViewById<SwitchMaterial>(R.id.switchBlockPopups)
         val switchThirdPartyCookies = content.findViewById<SwitchMaterial>(R.id.switchThirdPartyCookies)
         val switchSafeBrowsing = content.findViewById<SwitchMaterial>(R.id.switchSafeBrowsing)
         val switchAutoplay = content.findViewById<SwitchMaterial>(R.id.switchAutoplay)
         val switchClearOnExit = content.findViewById<SwitchMaterial>(R.id.switchClearOnExit)
+        val sliderFontScale = content.findViewById<Slider>(R.id.sliderFontScale)
+        val fontScaleValue = content.findViewById<TextView>(R.id.fontScaleValue)
+        val btnImportBookmarks = content.findViewById<MaterialButton>(R.id.btnImportBookmarks)
+        val btnExportBookmarks = content.findViewById<MaterialButton>(R.id.btnExportBookmarks)
 
         homepageInput.setText(homepageUrl())
         val adapter = ArrayAdapter(
@@ -654,22 +664,47 @@ class MainActivity : AppCompatActivity() {
         searchInput.setText(currentSearchEngine().label, false)
 
         val initialDark = prefBoolean(KEY_DARK_MODE, true)
+        val initialShowToolbar = prefBoolean(KEY_SHOW_TOOLBAR, true)
         val initialJs = prefBoolean(KEY_JS_ENABLED, true)
         val initialDesktop = prefBoolean(KEY_DESKTOP_MODE, false)
         val initialBlockImages = prefBoolean(KEY_BLOCK_IMAGES, false)
+        val initialEnableZoom = prefBoolean(KEY_ENABLE_ZOOM, true)
+        val initialBlockPopups = prefBoolean(KEY_BLOCK_POPUPS, true)
         val initialThirdParty = prefBoolean(KEY_THIRD_PARTY_COOKIES, true)
         val initialSafeBrowsing = prefBoolean(KEY_SAFE_BROWSING, true)
         val initialAutoplay = prefBoolean(KEY_ALLOW_AUTOPLAY, true)
         val initialClearOnExit = prefBoolean(KEY_CLEAR_ON_EXIT, false)
+        val initialFontScale = prefInt(KEY_FONT_SCALE, 100)
 
         switchDarkMode.isChecked = initialDark
+        switchShowToolbar.isChecked = initialShowToolbar
         switchJavascript.isChecked = initialJs
         switchDesktopMode.isChecked = initialDesktop
         switchBlockImages.isChecked = initialBlockImages
+        switchEnableZoom.isChecked = initialEnableZoom
+        switchBlockPopups.isChecked = initialBlockPopups
         switchThirdPartyCookies.isChecked = initialThirdParty
         switchSafeBrowsing.isChecked = initialSafeBrowsing
         switchAutoplay.isChecked = initialAutoplay
         switchClearOnExit.isChecked = initialClearOnExit
+        sliderFontScale.value = initialFontScale.toFloat()
+        fontScaleValue.text = getString(R.string.settings_font_scale_value, initialFontScale)
+        sliderFontScale.addOnChangeListener { _, value, _ ->
+            fontScaleValue.text = getString(R.string.settings_font_scale_value, value.toInt())
+        }
+
+        btnImportBookmarks.setOnClickListener {
+            importBookmarksLauncher.launch(arrayOf("application/json", "text/*"))
+        }
+
+        btnExportBookmarks.setOnClickListener {
+            if (loadBookmarksList().isEmpty()) {
+                Toast.makeText(this, getString(R.string.bookmarks_export_none), Toast.LENGTH_SHORT).show()
+            } else {
+                val suggested = "surfscape-bookmarks-${System.currentTimeMillis() / 1000}.json"
+                exportBookmarksLauncher.launch(suggested)
+            }
+        }
 
         MaterialAlertDialogBuilder(this)
             .setTitle(R.string.settings_title)
@@ -684,34 +719,46 @@ class MainActivity : AppCompatActivity() {
                 val chosenEngine = searchEngines.firstOrNull { it.label == searchInput.text.toString() }
                     ?: currentSearchEngine()
                 val newDark = switchDarkMode.isChecked
+                val newShowToolbar = switchShowToolbar.isChecked
                 val newJs = switchJavascript.isChecked
                 val newDesktop = switchDesktopMode.isChecked
                 val newBlockImages = switchBlockImages.isChecked
+                val newEnableZoom = switchEnableZoom.isChecked
+                val newBlockPopups = switchBlockPopups.isChecked
                 val newThirdParty = switchThirdPartyCookies.isChecked
                 val newSafeBrowsing = switchSafeBrowsing.isChecked
                 val newAutoplay = switchAutoplay.isChecked
                 val newClearOnExit = switchClearOnExit.isChecked
+                val newFontScale = sliderFontScale.value.toInt()
 
                 prefs.edit()
                     .putString(KEY_HOMEPAGE, normalizedHomepage)
                     .putString(KEY_SEARCH_ENGINE, chosenEngine.id)
                     .putBoolean(KEY_DARK_MODE, newDark)
+                    .putBoolean(KEY_SHOW_TOOLBAR, newShowToolbar)
                     .putBoolean(KEY_JS_ENABLED, newJs)
                     .putBoolean(KEY_DESKTOP_MODE, newDesktop)
                     .putBoolean(KEY_BLOCK_IMAGES, newBlockImages)
+                    .putBoolean(KEY_ENABLE_ZOOM, newEnableZoom)
+                    .putBoolean(KEY_BLOCK_POPUPS, newBlockPopups)
                     .putBoolean(KEY_THIRD_PARTY_COOKIES, newThirdParty)
                     .putBoolean(KEY_SAFE_BROWSING, newSafeBrowsing)
                     .putBoolean(KEY_ALLOW_AUTOPLAY, newAutoplay)
                     .putBoolean(KEY_CLEAR_ON_EXIT, newClearOnExit)
+                    .putInt(KEY_FONT_SCALE, newFontScale)
                     .apply()
                 val requiresReload = initialDark != newDark ||
+                    initialBlockPopups != newBlockPopups ||
                     initialJs != newJs ||
                     initialDesktop != newDesktop ||
                     initialBlockImages != newBlockImages ||
+                    initialEnableZoom != newEnableZoom ||
                     initialThirdParty != newThirdParty ||
                     initialSafeBrowsing != newSafeBrowsing ||
-                    initialAutoplay != newAutoplay
+                    initialAutoplay != newAutoplay ||
+                    initialFontScale != newFontScale
                 applySettingsToAllTabs()
+                applyUiPreferences()
                 if (requiresReload) {
                     tabs.forEach { tab ->
                         if (tab.url.isNotBlank()) {
@@ -734,6 +781,8 @@ class MainActivity : AppCompatActivity() {
     private fun applySettingsToAllTabs() {
         tabs.forEach { applySettingsToWebView(it) }
         activeTab?.let { updateReloadButton(it.isLoading) }
+        applyUiPreferences()
+        updateNavigationState()
     }
 
     private fun showHistoryDialog() {
@@ -753,6 +802,7 @@ class MainActivity : AppCompatActivity() {
                 historyEntries.clear()
                 saveHistory()
                 Toast.makeText(this, getString(R.string.history_empty), Toast.LENGTH_SHORT).show()
+                updateNavigationState()
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
@@ -842,6 +892,7 @@ class MainActivity : AppCompatActivity() {
             historyEntries.subList(0, historyEntries.size - MAX_HISTORY).clear()
         }
         saveHistory()
+        updateNavigationState()
     }
 
     private fun saveHistory() {
@@ -870,6 +921,7 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {
             historyEntries.clear()
         }
+        updateNavigationState()
     }
 
     private fun applySettingsToWebView(tab: BrowserTab) {
@@ -882,8 +934,17 @@ class MainActivity : AppCompatActivity() {
         settings.userAgentString = if (desktopMode) desktopUserAgent else mobileUserAgent
         settings.useWideViewPort = true
         settings.loadWithOverviewMode = desktopMode
+        val enableZoom = prefBoolean(KEY_ENABLE_ZOOM, true)
+        settings.setSupportZoom(enableZoom)
+        settings.builtInZoomControls = enableZoom
+        settings.displayZoomControls = false
+        val blockPopups = prefBoolean(KEY_BLOCK_POPUPS, true)
+        settings.javaScriptCanOpenWindowsAutomatically = !blockPopups
+        settings.setSupportMultipleWindows(!blockPopups)
         val allowAutoplay = prefBoolean(KEY_ALLOW_AUTOPLAY, true)
         settings.mediaPlaybackRequiresUserGesture = !allowAutoplay
+        val fontScale = prefInt(KEY_FONT_SCALE, 100).coerceIn(50, 200)
+        settings.textZoom = fontScale
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
             WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, prefBoolean(KEY_DARK_MODE, true))
         }
@@ -898,7 +959,76 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun exportBookmarksToUri(uri: Uri) {
+        val entries = loadBookmarksList()
+        try {
+            contentResolver.openOutputStream(uri)?.use { output ->
+                output.bufferedWriter(Charsets.UTF_8).use { writer ->
+                    val array = JSONArray()
+                    entries.forEach { (title, url) ->
+                        val obj = JSONObject()
+                        obj.put("title", title)
+                        obj.put("url", url)
+                        array.put(obj)
+                    }
+                    writer.write(array.toString(2))
+                    writer.flush()
+                }
+            } ?: throw IllegalStateException("No output stream")
+            Toast.makeText(this, getString(R.string.bookmarks_export_success), Toast.LENGTH_SHORT).show()
+        } catch (t: Throwable) {
+            Toast.makeText(this, getString(R.string.bookmarks_export_failed), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun importBookmarksFromUri(uri: Uri) {
+        try {
+            val json = contentResolver.openInputStream(uri)?.use { stream ->
+                stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            } ?: throw IllegalStateException("Empty file")
+            val array = JSONArray(json)
+            val raw = loadBookmarksRaw()
+            var imported = 0
+            for (i in 0 until array.length()) {
+                val element = array.get(i)
+                val (title, url) = when (element) {
+                    is JSONObject -> {
+                        val urlValue = element.optString("url")
+                        val titleValue = element.optString("title", getHostForStatus(urlValue))
+                        titleValue to urlValue
+                    }
+                    is String -> getHostForStatus(element) to element
+                    else -> continue
+                }
+                if (url.isBlank()) continue
+                findBookmarkEntry(url, raw)?.let { raw.remove(it) }
+                val stored = JSONObject().apply {
+                    put("title", title)
+                    put("url", url)
+                }.toString()
+                raw.add(stored)
+                imported++
+            }
+            if (imported == 0) {
+                Toast.makeText(this, getString(R.string.bookmarks_import_none), Toast.LENGTH_SHORT).show()
+                return
+            }
+            saveBookmarksRaw(raw)
+            updateBookmarkIcon()
+            updateNavigationState()
+            Toast.makeText(this, getString(R.string.bookmarks_import_success), Toast.LENGTH_SHORT).show()
+        } catch (t: Throwable) {
+            Toast.makeText(this, getString(R.string.bookmarks_import_failed), Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun prefBoolean(key: String, default: Boolean): Boolean = prefs.getBoolean(key, default)
+
+    private fun prefInt(key: String, default: Int): Int = prefs.getInt(key, default)
+
+    private fun applyUiPreferences() {
+        binding.topActionBar.isVisible = prefBoolean(KEY_SHOW_TOOLBAR, true)
+    }
 
     private fun shouldClearOnExit(): Boolean = prefBoolean(KEY_CLEAR_ON_EXIT, false)
 
@@ -919,6 +1049,7 @@ class MainActivity : AppCompatActivity() {
             .remove(KEY_LAST_URL)
             .remove(KEY_HISTORY)
             .apply()
+        updateNavigationState()
     }
 
     private fun handleExternalUrl(url: String?): Boolean {
@@ -958,13 +1089,17 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_LAST_SESSION = "session_urls"
         private const val KEY_JS_ENABLED = "js_enabled"
         private const val KEY_DARK_MODE = "dark_mode"
+        private const val KEY_SHOW_TOOLBAR = "show_toolbar"
         private const val KEY_DESKTOP_MODE = "desktop_mode"
         private const val KEY_BLOCK_IMAGES = "block_images"
+        private const val KEY_ENABLE_ZOOM = "enable_zoom"
+        private const val KEY_BLOCK_POPUPS = "block_popups"
         private const val KEY_THIRD_PARTY_COOKIES = "third_party_cookies"
         private const val KEY_SAFE_BROWSING = "safe_browsing"
         private const val KEY_ALLOW_AUTOPLAY = "allow_autoplay"
         private const val KEY_CLEAR_ON_EXIT = "clear_on_exit"
         private const val KEY_HISTORY = "history_entries"
+        private const val KEY_FONT_SCALE = "font_scale"
         private const val KEY_STATE_URLS = "state_urls"
         private const val KEY_STATE_ACTIVE_INDEX = "state_active_index"
         private const val HOME_URL_DEFAULT = "https://html.duckduckgo.com/html"

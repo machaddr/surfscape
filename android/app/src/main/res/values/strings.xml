@@ -49,4 +49,21 @@
     <string name="history_clear">Clear history</string>
     <string name="bookmarks_title">Saved bookmarks</string>
     <string name="bookmarks_empty">No bookmarks saved yet.</string>
+    <string name="settings_show_toolbar">Show quick toolbar</string>
+    <string name="settings_enable_zoom">Enable pinch zoom</string>
+    <string name="settings_block_popups">Block pop-ups</string>
+    <string name="settings_section_appearance">Appearance</string>
+    <string name="settings_section_privacy">Privacy & Security</string>
+    <string name="settings_section_behavior">Browsing behaviour</string>
+    <string name="settings_font_scale">Font size</string>
+    <string name="settings_font_scale_value">%1$d%%</string>
+    <string name="settings_section_bookmarks">Bookmarks</string>
+    <string name="settings_import_bookmarks">Import bookmarks</string>
+    <string name="settings_export_bookmarks">Export bookmarks</string>
+    <string name="bookmarks_import_success">Bookmarks imported</string>
+    <string name="bookmarks_import_failed">Failed to import bookmarks</string>
+    <string name="bookmarks_import_none">No bookmarks found in file</string>
+    <string name="bookmarks_export_success">Bookmarks exported</string>
+    <string name="bookmarks_export_failed">Failed to export bookmarks</string>
+    <string name="bookmarks_export_none">No bookmarks to export</string>
 </resources>

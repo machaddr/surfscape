@@ -43,28 +43,84 @@
         android:layout_width="match_parent"
         android:layout_height="12dp" />
 
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/settings_section_appearance"
+        android:textAppearance="?attr/textAppearanceHeadlineSmall"
+        android:textStyle="bold"
+        android:textColor="@android:color/black" />
+
     <com.google.android.material.switchmaterial.SwitchMaterial
         android:id="@+id/switchDarkMode"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
         android:text="@string/settings_dark_mode"
-        android:textAppearance="?attr/textAppearanceBodyLarge" />
+        android:textSize="18sp" />
+
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switchShowToolbar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/settings_show_toolbar"
+        android:textSize="18sp" />
+
+    <TextView
+        android:id="@+id/fontScaleLabel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/settings_font_scale"
+        android:textColor="@android:color/black"
+        android:textSize="18sp" />
+
+    <com.google.android.material.slider.Slider
+        android:id="@+id/sliderFontScale"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:valueFrom="80"
+        android:valueTo="160"
+        android:stepSize="5"
+        android:value="100"
+        app:labelBehavior="gone" />
+
+    <TextView
+        android:id="@+id/fontScaleValue"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="@android:color/darker_gray"
+        android:textSize="16sp"
+        android:text="" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="12dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/settings_section_privacy"
+        android:textAppearance="?attr/textAppearanceHeadlineSmall"
+        android:textStyle="bold"
+        android:textColor="@android:color/black" />
 
     <com.google.android.material.switchmaterial.SwitchMaterial
         android:id="@+id/switchJavascript"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="4dp"
+        android:layout_marginTop="6dp"
         android:text="@string/settings_enable_js"
-        android:textAppearance="?attr/textAppearanceBodyLarge" />
+        android:textSize="18sp" />
 
     <com.google.android.material.switchmaterial.SwitchMaterial
-        android:id="@+id/switchDesktopMode"
+        android:id="@+id/switchBlockPopups"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:text="@string/settings_desktop_mode"
-        android:textAppearance="?attr/textAppearanceBodyLarge" />
+        android:text="@string/settings_block_popups"
+        android:textSize="18sp" />
 
     <com.google.android.material.switchmaterial.SwitchMaterial
         android:id="@+id/switchBlockImages"
@@ -72,7 +128,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
         android:text="@string/settings_block_images"
-        android:textAppearance="?attr/textAppearanceBodyLarge" />
+        android:textSize="18sp" />
 
     <com.google.android.material.switchmaterial.SwitchMaterial
         android:id="@+id/switchThirdPartyCookies"
@@ -80,7 +136,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
         android:text="@string/settings_third_party_cookies"
-        android:textAppearance="?attr/textAppearanceBodyLarge" />
+        android:textSize="18sp" />
 
     <com.google.android.material.switchmaterial.SwitchMaterial
         android:id="@+id/switchSafeBrowsing"
@@ -88,7 +144,35 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
         android:text="@string/settings_safe_browsing"
-        android:textAppearance="?attr/textAppearanceBodyLarge" />
+        android:textSize="18sp" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="12dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/settings_section_behavior"
+        android:textAppearance="?attr/textAppearanceHeadlineSmall"
+        android:textStyle="bold"
+        android:textColor="@android:color/black" />
+
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switchDesktopMode"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:text="@string/settings_desktop_mode"
+        android:textSize="18sp" />
+
+    <com.google.android.material.switchmaterial.SwitchMaterial
+        android:id="@+id/switchEnableZoom"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/settings_enable_zoom"
+        android:textSize="18sp" />
 
     <com.google.android.material.switchmaterial.SwitchMaterial
         android:id="@+id/switchAutoplay"
@@ -96,7 +180,7 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
         android:text="@string/settings_allow_autoplay"
-        android:textAppearance="?attr/textAppearanceBodyLarge" />
+        android:textSize="18sp" />
 
     <com.google.android.material.switchmaterial.SwitchMaterial
         android:id="@+id/switchClearOnExit"
@@ -104,6 +188,50 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
         android:text="@string/settings_clear_on_exit"
-        android:textAppearance="?attr/textAppearanceBodyLarge" />
+        android:textSize="18sp" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="12dp" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/settings_section_bookmarks"
+        android:textAppearance="?attr/textAppearanceHeadlineSmall"
+        android:textStyle="bold"
+        android:textColor="@android:color/black" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnImportBookmarks"
+        style="@style/Widget.MaterialComponents.Button"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/settings_import_bookmarks"
+        android:textAllCaps="false"
+        android:textSize="18sp"
+        app:backgroundTint="?attr/colorPrimary"
+        app:icon="@drawable/ic_bookmarks"
+        app:iconGravity="textStart"
+        app:iconPadding="12dp"
+        app:iconTint="@android:color/white"
+        android:textColor="@android:color/white" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/btnExportBookmarks"
+        style="@style/Widget.MaterialComponents.Button"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/settings_export_bookmarks"
+        android:textAllCaps="false"
+        android:textSize="18sp"
+        app:backgroundTint="?attr/colorPrimary"
+        app:icon="@drawable/ic_history"
+        app:iconGravity="textStart"
+        app:iconPadding="12dp"
+        app:iconTint="@android:color/white"
+        android:textColor="@android:color/white" />
 
 </LinearLayout>
