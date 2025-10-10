@@ -53,7 +53,7 @@
     <string name="settings_enable_zoom">Enable pinch zoom</string>
     <string name="settings_block_popups">Block pop-ups</string>
     <string name="settings_section_appearance">Appearance</string>
-    <string name="settings_section_privacy">Privacy & Security</string>
+    <string name="settings_section_privacy">Privacy &amp; Security</string>
     <string name="settings_section_behavior">Browsing behaviour</string>
     <string name="settings_font_scale">Font size</string>
     <string name="settings_font_scale_value">%1$d%%</string>
