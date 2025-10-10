@@ -41,6 +41,8 @@ import java.net.URLEncoder
 import java.util.ArrayList
 import java.util.LinkedHashSet
 import java.util.concurrent.atomic.AtomicLong
+import org.json.JSONArray
+import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
 
@@ -67,6 +69,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var desktopUserAgent: String
 
     private lateinit var searchEngines: List<SearchEngine>
+    private val historyEntries = mutableListOf<Pair<String, String>>()
 
     private val fileChooserLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -97,6 +100,7 @@ class MainActivity : AppCompatActivity() {
 
         searchEngines = buildSearchEngines()
         setupUiListeners()
+        loadHistory()
 
         if (savedInstanceState != null) {
             restoreFromState(savedInstanceState)
@@ -172,24 +176,52 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        binding.btnBack.setOnClickListener { activeTab?.webView?.goBack() }
-        binding.btnForward.setOnClickListener { activeTab?.webView?.goForward() }
-        binding.btnHome.setOnClickListener { loadInActiveTab(homepageUrl()) }
-        binding.btnReload.setOnClickListener {
-            val tab = activeTab ?: return@setOnClickListener
+        binding.btnSend.setOnClickListener { submitUrlFromBar() }
+
+        val goBack = {
+            activeTab?.webView?.let { if (it.canGoBack()) it.goBack() }
+        }
+        listOf(binding.btnBack, binding.btnBackTop).forEach { it.setOnClickListener { goBack() } }
+
+        val goForward = {
+            activeTab?.webView?.let { if (it.canGoForward()) it.goForward() }
+        }
+        listOf(binding.btnForward, binding.btnForwardTop).forEach { it.setOnClickListener { goForward() } }
+
+        val reloadAction = l@{
+            val tab = activeTab ?: return@l
             if (tab.isLoading) {
                 tab.webView.stopLoading()
             } else {
                 tab.webView.reload()
             }
         }
+        listOf(binding.btnReload, binding.btnReloadTop).forEach { button ->
+            button.setOnClickListener { reloadAction() }
+        }
+
+        val homeAction = { loadInActiveTab(homepageUrl()) }
+        listOf(binding.btnHome, binding.btnHomeTop).forEach { it.setOnClickListener { homeAction() } }
+
+        val bookmarkAction = { toggleBookmark() }
+        listOf(binding.btnBookmark, binding.btnBookmarkTop).forEach { it.setOnClickListener { bookmarkAction() } }
+
+        val historyAction = { showHistoryDialog() }
+        listOf(binding.btnHistory, binding.btnHistoryTop).forEach { it.setOnClickListener { historyAction() } }
+
+        val savedAction = { showBookmarksDialog() }
+        listOf(binding.btnSaved, binding.btnSavedTop).forEach { it.setOnClickListener { savedAction() } }
+
+        val aiAction = { showAiPlaceholder() }
+        listOf(binding.btnAi, binding.btnAiTop).forEach { it.setOnClickListener { aiAction() } }
+
+        val settingsAction = { showSettingsDialog() }
+        listOf(binding.btnSettings, binding.btnSettingsTop).forEach { it.setOnClickListener { settingsAction() } }
+
         binding.btnNewTab.setOnClickListener {
             val tab = createTab(homepageUrl(), select = true)
             tab.webView.requestFocus()
         }
-        binding.btnBookmark.setOnClickListener { toggleBookmark() }
-        binding.btnAi.setOnClickListener { showAiPlaceholder() }
-        binding.btnSettings.setOnClickListener { showSettingsDialog() }
     }
 
     private fun buildSearchEngines(): List<SearchEngine> = listOf(
@@ -365,6 +397,10 @@ class MainActivity : AppCompatActivity() {
                     updateReloadButton(false)
                     updateBookmarkIcon()
                 }
+                val historyTitle = view?.title?.takeIf { !it.isNullOrBlank() }?.toString()
+                    ?: tab.title.takeIf { it.isNotBlank() }
+                    ?: getHostForStatus(tab.url)
+                recordHistory(historyTitle, tab.url)
                 prefs.edit().putString(KEY_LAST_URL, tab.url).apply()
                 persistSession()
             }
@@ -506,48 +542,56 @@ class MainActivity : AppCompatActivity() {
         val tab = activeTab ?: return
         val url = tab.url
         if (url.isBlank()) return
-        val current = prefs.getStringSet(KEY_BOOKMARKS, emptySet())?.toMutableSet() ?: mutableSetOf()
-        val added: Boolean
-        if (current.contains(url)) {
-            current.remove(url)
-            added = false
+        val raw = loadBookmarksRaw()
+        val existing = findBookmarkEntry(url, raw)
+        val messageRes: Int
+        if (existing != null) {
+            raw.remove(existing)
+            messageRes = R.string.bookmark_removed
         } else {
-            current.add(url)
-            added = true
+            val title = tab.title.takeIf { it.isNotBlank() } ?: getHostForStatus(url)
+            val entry = JSONObject().apply {
+                put("title", title)
+                put("url", url)
+            }.toString()
+            raw.add(entry)
+            messageRes = R.string.bookmark_added
         }
-        prefs.edit().putStringSet(KEY_BOOKMARKS, current).apply()
+        saveBookmarksRaw(raw)
         updateBookmarkIcon()
-        val message = if (added) R.string.bookmark_added else R.string.bookmark_removed
-        Toast.makeText(this, getString(message), Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, getString(messageRes), Toast.LENGTH_SHORT).show()
     }
 
     private fun updateBookmarkIcon() {
         val tab = activeTab
         val currentUrl = tab?.url.orEmpty()
-        val saved = prefs.getStringSet(KEY_BOOKMARKS, emptySet()) ?: emptySet()
-        val icon = if (currentUrl.isNotBlank() && saved.contains(currentUrl)) {
-            R.drawable.ic_star_filled
-        } else {
-            R.drawable.ic_star_border
+        val saved = loadBookmarksRaw()
+        val hasBookmark = currentUrl.isNotBlank() && findBookmarkEntry(currentUrl, saved) != null
+        val icon = if (hasBookmark) R.drawable.ic_star_filled else R.drawable.ic_star_border
+        listOf(binding.btnBookmark, binding.btnBookmarkTop).forEach { button ->
+            button.setImageDrawable(AppCompatResources.getDrawable(this, icon))
         }
-        binding.btnBookmark.setImageDrawable(AppCompatResources.getDrawable(this, icon))
     }
 
     private fun updateReloadButton(isLoading: Boolean) {
         val icon = if (isLoading) R.drawable.ic_close else R.drawable.ic_refresh
-        binding.btnReload.setImageDrawable(AppCompatResources.getDrawable(this, icon))
-        binding.btnReload.contentDescription = getString(
-            if (isLoading) R.string.stop_loading else R.string.reload
-        )
+        val description = getString(if (isLoading) R.string.stop_loading else R.string.reload)
+        listOf(binding.btnReload, binding.btnReloadTop).forEach { button ->
+            button.setImageDrawable(AppCompatResources.getDrawable(this, icon))
+            button.contentDescription = description
+        }
     }
 
     private fun updateNavigationState() {
         val tab = activeTab
-        binding.btnBack.isEnabled = tab?.webView?.canGoBack() == true
-        binding.btnForward.isEnabled = tab?.webView?.canGoForward() == true
-        binding.btnReload.isEnabled = tab != null
-        binding.btnHome.isEnabled = tab != null
-        binding.btnBookmark.isEnabled = tab != null
+        val canGoBack = tab?.webView?.canGoBack() == true
+        val canGoForward = tab?.webView?.canGoForward() == true
+        val hasTab = tab != null
+        listOf(binding.btnBack, binding.btnBackTop).forEach { it.isEnabled = canGoBack }
+        listOf(binding.btnForward, binding.btnForwardTop).forEach { it.isEnabled = canGoForward }
+        listOf(binding.btnReload, binding.btnReloadTop).forEach { it.isEnabled = hasTab }
+        listOf(binding.btnHome, binding.btnHomeTop).forEach { it.isEnabled = hasTab }
+        listOf(binding.btnBookmark, binding.btnBookmarkTop).forEach { it.isEnabled = hasTab }
     }
 
     private fun updateUrlBar(url: String) {
@@ -692,6 +736,142 @@ class MainActivity : AppCompatActivity() {
         activeTab?.let { updateReloadButton(it.isLoading) }
     }
 
+    private fun showHistoryDialog() {
+        if (historyEntries.isEmpty()) {
+            Toast.makeText(this, getString(R.string.history_empty), Toast.LENGTH_SHORT).show()
+            return
+        }
+        val items = historyEntries.asReversed()
+        val labels = items.map { (title, url) -> "$title\n$url" }.toTypedArray()
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.history_title)
+            .setItems(labels) { _, which ->
+                val entry = items[which]
+                loadInActiveTab(entry.second)
+            }
+            .setPositiveButton(R.string.history_clear) { _, _ ->
+                historyEntries.clear()
+                saveHistory()
+                Toast.makeText(this, getString(R.string.history_empty), Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun showBookmarksDialog() {
+        val entries = loadBookmarksList()
+        if (entries.isEmpty()) {
+            Toast.makeText(this, getString(R.string.bookmarks_empty), Toast.LENGTH_SHORT).show()
+            return
+        }
+        val labels = entries.map { (title, url) -> "$title\n$url" }.toTypedArray()
+        MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.bookmarks_title)
+            .setItems(labels) { _, which ->
+                val entry = entries[which]
+                loadInActiveTab(entry.second)
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun loadBookmarksRaw(): MutableSet<String> {
+        val stored = prefs.getStringSet(KEY_BOOKMARKS, emptySet())
+        return if (stored != null) HashSet(stored) else HashSet()
+    }
+
+    private fun saveBookmarksRaw(raw: Set<String>) {
+        prefs.edit().putStringSet(KEY_BOOKMARKS, HashSet(raw)).apply()
+    }
+
+    private fun findBookmarkEntry(url: String, entries: Set<String>): String? {
+        entries.forEach { entry ->
+            when {
+                entry.startsWith("{") -> {
+                    try {
+                        if (JSONObject(entry).optString("url") == url) return entry
+                    } catch (_: Exception) {
+                        // ignore corrupt entry
+                    }
+                }
+                entry.contains(BOOKMARK_DELIMITER) -> {
+                    val candidate = entry.substringAfter(BOOKMARK_DELIMITER, entry)
+                    if (candidate == url) return entry
+                }
+                entry == url -> return entry
+            }
+        }
+        return null
+    }
+
+    private fun parseBookmarkEntry(entry: String): Pair<String, String> {
+        return when {
+            entry.startsWith("{") -> {
+                try {
+                    val obj = JSONObject(entry)
+                    val url = obj.optString("url")
+                    val title = obj.optString("title", getHostForStatus(url))
+                    title to url
+                } catch (_: Exception) {
+                    val url = entry
+                    getHostForStatus(url) to url
+                }
+            }
+            entry.contains(BOOKMARK_DELIMITER) -> {
+                val parts = entry.split(BOOKMARK_DELIMITER, limit = 2)
+                val url = parts.getOrNull(1).orEmpty()
+                val title = parts.getOrNull(0)?.takeIf { it.isNotBlank() } ?: getHostForStatus(url)
+                title to url
+            }
+            else -> getHostForStatus(entry) to entry
+        }
+    }
+
+    private fun loadBookmarksList(): List<Pair<String, String>> {
+        return loadBookmarksRaw()
+            .map { parseBookmarkEntry(it) }
+            .filter { it.second.isNotBlank() }
+            .sortedBy { it.first.lowercase() }
+    }
+
+    private fun recordHistory(title: String, url: String) {
+        if (url.isBlank() || url.startsWith("about:")) return
+        historyEntries.removeAll { it.second == url }
+        historyEntries.add(title to url)
+        if (historyEntries.size > MAX_HISTORY) {
+            historyEntries.subList(0, historyEntries.size - MAX_HISTORY).clear()
+        }
+        saveHistory()
+    }
+
+    private fun saveHistory() {
+        val array = JSONArray()
+        historyEntries.forEach { (title, url) ->
+            val obj = JSONObject()
+            obj.put("title", title)
+            obj.put("url", url)
+            array.put(obj)
+        }
+        prefs.edit().putString(KEY_HISTORY, array.toString()).apply()
+    }
+
+    private fun loadHistory() {
+        historyEntries.clear()
+        val json = prefs.getString(KEY_HISTORY, null) ?: return
+        try {
+            val array = JSONArray(json)
+            for (i in 0 until array.length()) {
+                val obj = array.optJSONObject(i) ?: continue
+                val url = obj.optString("url")
+                if (url.isNullOrBlank()) continue
+                val title = obj.optString("title", getHostForStatus(url))
+                historyEntries.add(title to url)
+            }
+        } catch (_: Exception) {
+            historyEntries.clear()
+        }
+    }
+
     private fun applySettingsToWebView(tab: BrowserTab) {
         val settings = tab.webView.settings
         val jsEnabled = prefBoolean(KEY_JS_ENABLED, true)
@@ -733,9 +913,11 @@ class MainActivity : AppCompatActivity() {
             flush()
         }
         WebStorage.getInstance().deleteAllData()
+        historyEntries.clear()
         prefs.edit()
             .remove(KEY_LAST_SESSION)
             .remove(KEY_LAST_URL)
+            .remove(KEY_HISTORY)
             .apply()
     }
 
@@ -782,9 +964,12 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_SAFE_BROWSING = "safe_browsing"
         private const val KEY_ALLOW_AUTOPLAY = "allow_autoplay"
         private const val KEY_CLEAR_ON_EXIT = "clear_on_exit"
+        private const val KEY_HISTORY = "history_entries"
         private const val KEY_STATE_URLS = "state_urls"
         private const val KEY_STATE_ACTIVE_INDEX = "state_active_index"
         private const val HOME_URL_DEFAULT = "https://html.duckduckgo.com/html"
+        private const val BOOKMARK_DELIMITER = "||"
+        private const val MAX_HISTORY = 100
         private val SCHEME_REGEX = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://")
     }
 }

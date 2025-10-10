@@ -21,30 +21,156 @@
         app:contentInsetRight="0dp"
         app:title="">
 
-        <com.google.android.material.textfield.TextInputLayout
-            android:id="@+id/urlInputLayout"
-            style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox.Dense"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="@string/enter_url"
-            app:boxBackgroundColor="@android:color/transparent"
-            app:boxStrokeColor="@android:color/white"
-            app:boxStrokeWidth="1dp"
-            app:boxStrokeWidthFocused="2dp"
-            app:endIconMode="clear_text"
-            app:endIconTint="@android:color/white"
-            app:hintTextColor="@android:color/white">
+            android:orientation="vertical">
 
-            <com.google.android.material.textfield.TextInputEditText
-                android:id="@+id/urlBar"
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:imeOptions="actionGo"
-                android:inputType="textUri"
-                android:maxLines="1"
-                android:textColor="@android:color/white"
-                android:textColorHint="@android:color/white" />
-        </com.google.android.material.textfield.TextInputLayout>
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <com.google.android.material.textfield.TextInputLayout
+                    android:id="@+id/urlInputLayout"
+                    style="@style/Widget.MaterialComponents.TextInputLayout.OutlinedBox.Dense"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:hint="@string/enter_url"
+                    app:boxBackgroundColor="@android:color/transparent"
+                    app:boxStrokeColor="@android:color/white"
+                    app:boxStrokeWidth="1dp"
+                    app:boxStrokeWidthFocused="2dp"
+                    app:endIconMode="clear_text"
+                    app:endIconTint="@android:color/white"
+                    app:hintTextColor="@android:color/white">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/urlBar"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:imeOptions="actionGo"
+                        android:inputType="textUri"
+                        android:maxLines="1"
+                        android:textColor="@android:color/white"
+                        android:textColorHint="@android:color/white" />
+                </com.google.android.material.textfield.TextInputLayout>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnSend"
+                    style="@style/Widget.MaterialComponents.Button"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="@string/send"
+                    android:textAllCaps="false"
+                    android:textColor="@android:color/white"
+                    app:backgroundTint="@android:color/transparent"
+                    app:strokeColor="@android:color/white"
+                    app:strokeWidth="1dp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:id="@+id/topActionBar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingTop="6dp"
+                android:paddingBottom="2dp">
+
+                <ImageButton
+                    android:id="@+id/btnBackTop"
+                    style="?attr/borderlessButtonStyle"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:layout_marginEnd="4dp"
+                    android:contentDescription="@string/back"
+                    android:src="@drawable/ic_arrow_back"
+                    android:tint="@android:color/white" />
+
+                <ImageButton
+                    android:id="@+id/btnForwardTop"
+                    style="?attr/borderlessButtonStyle"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:layout_marginEnd="4dp"
+                    android:contentDescription="@string/forward"
+                    android:src="@drawable/ic_arrow_forward"
+                    android:tint="@android:color/white" />
+
+                <ImageButton
+                    android:id="@+id/btnReloadTop"
+                    style="?attr/borderlessButtonStyle"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:layout_marginEnd="4dp"
+                    android:contentDescription="@string/reload"
+                    android:src="@drawable/ic_refresh"
+                    android:tint="@android:color/white" />
+
+                <ImageButton
+                    android:id="@+id/btnHomeTop"
+                    style="?attr/borderlessButtonStyle"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:layout_marginEnd="4dp"
+                    android:contentDescription="@string/home"
+                    android:src="@drawable/ic_home"
+                    android:tint="@android:color/white" />
+
+                <ImageButton
+                    android:id="@+id/btnHistoryTop"
+                    style="?attr/borderlessButtonStyle"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:layout_marginEnd="4dp"
+                    android:contentDescription="@string/history"
+                    android:src="@drawable/ic_history"
+                    android:tint="@android:color/white" />
+
+                <ImageButton
+                    android:id="@+id/btnSavedTop"
+                    style="?attr/borderlessButtonStyle"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:layout_marginEnd="4dp"
+                    android:contentDescription="@string/bookmarks_saved"
+                    android:src="@drawable/ic_bookmarks"
+                    android:tint="@android:color/white" />
+
+                <ImageButton
+                    android:id="@+id/btnBookmarkTop"
+                    style="?attr/borderlessButtonStyle"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:layout_marginEnd="4dp"
+                    android:contentDescription="@string/bookmark"
+                    android:src="@drawable/ic_star_border"
+                    android:tint="@android:color/white" />
+
+                <ImageButton
+                    android:id="@+id/btnAiTop"
+                    style="?attr/borderlessButtonStyle"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:layout_marginEnd="4dp"
+                    android:contentDescription="@string/ai_assistant"
+                    android:src="@drawable/ic_spark"
+                    android:tint="@android:color/white" />
+
+                <ImageButton
+                    android:id="@+id/btnSettingsTop"
+                    style="?attr/borderlessButtonStyle"
+                    android:layout_width="36dp"
+                    android:layout_height="36dp"
+                    android:contentDescription="@string/settings"
+                    android:src="@drawable/ic_settings"
+                    android:tint="@android:color/white" />
+            </LinearLayout>
+        </LinearLayout>
     </com.google.android.material.appbar.MaterialToolbar>
 
     <LinearLayout
@@ -106,19 +232,21 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
-        android:gravity="center_vertical"
+        android:gravity="center"
         android:paddingStart="8dp"
         android:paddingEnd="8dp"
-        android:paddingTop="6dp"
-        android:paddingBottom="6dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="10dp"
         android:background="?attr/colorPrimary">
 
         <ImageButton
             android:id="@+id/btnBack"
             style="?attr/borderlessButtonStyle"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:padding="4dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:padding="6dp"
             android:contentDescription="@string/back"
             android:src="@drawable/ic_arrow_back"
             android:tint="@android:color/white" />
@@ -126,9 +254,11 @@
         <ImageButton
             android:id="@+id/btnForward"
             style="?attr/borderlessButtonStyle"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:padding="4dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:padding="6dp"
             android:contentDescription="@string/forward"
             android:src="@drawable/ic_arrow_forward"
             android:tint="@android:color/white" />
@@ -136,9 +266,11 @@
         <ImageButton
             android:id="@+id/btnReload"
             style="?attr/borderlessButtonStyle"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:padding="4dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:padding="6dp"
             android:contentDescription="@string/reload"
             android:src="@drawable/ic_refresh"
             android:tint="@android:color/white" />
@@ -146,19 +278,47 @@
         <ImageButton
             android:id="@+id/btnHome"
             style="?attr/borderlessButtonStyle"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:padding="4dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:padding="6dp"
             android:contentDescription="@string/home"
             android:src="@drawable/ic_home"
             android:tint="@android:color/white" />
 
         <ImageButton
+            android:id="@+id/btnHistory"
+            style="?attr/borderlessButtonStyle"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:padding="6dp"
+            android:contentDescription="@string/history"
+            android:src="@drawable/ic_history"
+            android:tint="@android:color/white" />
+
+        <ImageButton
+            android:id="@+id/btnSaved"
+            style="?attr/borderlessButtonStyle"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:padding="6dp"
+            android:contentDescription="@string/bookmarks_saved"
+            android:src="@drawable/ic_bookmarks"
+            android:tint="@android:color/white" />
+
+        <ImageButton
             android:id="@+id/btnBookmark"
             style="?attr/borderlessButtonStyle"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:padding="4dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:padding="6dp"
             android:contentDescription="@string/bookmark"
             android:src="@drawable/ic_star_border"
             android:tint="@android:color/white" />
@@ -166,9 +326,11 @@
         <ImageButton
             android:id="@+id/btnAi"
             style="?attr/borderlessButtonStyle"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:padding="4dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:padding="6dp"
             android:contentDescription="@string/ai_assistant"
             android:src="@drawable/ic_spark"
             android:tint="@android:color/white" />
@@ -176,9 +338,11 @@
         <ImageButton
             android:id="@+id/btnSettings"
             style="?attr/borderlessButtonStyle"
-            android:layout_width="40dp"
-            android:layout_height="40dp"
-            android:padding="4dp"
+            android:layout_width="44dp"
+            android:layout_height="44dp"
+            android:layout_marginStart="4dp"
+            android:layout_marginEnd="4dp"
+            android:padding="6dp"
             android:contentDescription="@string/settings"
             android:src="@drawable/ic_settings"
             android:tint="@android:color/white" />
