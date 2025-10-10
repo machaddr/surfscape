@@ -9,5 +9,5 @@
 # Avoid warnings for missing optional classes
 -dontwarn org.mozilla.**
 -dontwarn org.yaml.snakeyaml.**
+-dontwarn java.beans.**
 -keep class org.yaml.snakeyaml.** { *; }
--keep class java.beans.** { *; }

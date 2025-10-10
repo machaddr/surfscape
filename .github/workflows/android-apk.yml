@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      JAVA_VERSION: '17'
+      JAVA_VERSION: '22'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
