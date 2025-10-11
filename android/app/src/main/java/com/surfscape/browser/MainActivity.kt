@@ -2,8 +2,12 @@ package com.surfscape.browser
 
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -23,11 +27,15 @@ import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.ArrayAdapter
+import android.widget.Filter
+import android.widget.Filter.FilterResults
+import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.content.res.AppCompatResources
+import androidx.core.content.ContextCompat
 import androidx.core.view.children
 import androidx.core.view.isVisible
 import androidx.core.widget.addTextChangedListener
@@ -43,29 +51,19 @@ import com.google.android.material.slider.Slider
 import com.google.android.material.switchmaterial.SwitchMaterial
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.surfscape.browser.databinding.ActivityMainBinding
+import java.io.File
 import java.io.InputStream
 import java.net.URLEncoder
 import java.util.ArrayList
 import java.util.LinkedHashSet
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import android.text.Html
 import android.text.TextUtils
-import androidx.core.content.ContextCompat
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.drawable.BitmapDrawable
-import android.graphics.drawable.Drawable
-import android.view.LayoutInflater
-import android.view.View
-import android.view.ViewGroup
-import android.widget.ImageView
-import java.io.File
 
 class MainActivity : AppCompatActivity() {
 
@@ -93,7 +91,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var desktopUserAgent: String
 
     private lateinit var searchEngines: List<SearchEngine>
-    private data class HistoryEntry(val title: String, val url: String, val timestamp: Long)
+    private data class HistoryEntry(val title: String, val url: String, val timestamp: Long, val iconPath: String?)
     private data class BookmarkEntry(val title: String, val url: String, val iconPath: String?)
     private data class DialogEntry(val title: String, val subtitle: String, val icon: Drawable?)
     private data class SuggestionItem(val display: String, val secondary: String?, val url: String, val icon: Drawable?, val type: SuggestionType)
@@ -330,6 +328,7 @@ class MainActivity : AppCompatActivity() {
         val webView = WebView(this)
         val tab = BrowserTab(id = tabIdGenerator.incrementAndGet(), webView = webView)
         configureWebView(tab)
+        tab.faviconDrawable = loadDrawableForUrl(initialUrl) ?: defaultFavicon
 
         tabs += tab
         refreshTabStrip()
@@ -390,8 +389,7 @@ class MainActivity : AppCompatActivity() {
             override fun onReceivedIcon(view: WebView?, icon: Bitmap?) {
                 if (icon == null) return
                 val url = view?.url ?: tab.url
-                val host = hostFromUrl(url) ?: return
-                val drawable = saveFavicon(host, icon)
+                val drawable = saveFaviconForUrl(url, icon)
                 tab.faviconDrawable = drawable
                 updateTabChipSelection()
                 if (tab.id == activeTabId) {
@@ -659,7 +657,7 @@ class MainActivity : AppCompatActivity() {
             if (entry.title.contains(lower, ignoreCase = true) || entry.url.contains(lower, ignoreCase = true)) {
                 if (seen.add(entry.url)) {
                     val display = "${entry.url} (history)"
-                    val icon = loadDrawableForUrl(entry.url) ?: defaultFavicon
+                    val icon = loadDrawableForPath(entry.iconPath) ?: loadDrawableForUrl(entry.url) ?: defaultFavicon
                     suggestions.add(SuggestionItem(display, entry.title, entry.url, icon, SuggestionType.HISTORY))
                     if (suggestions.size >= 10) break
                 }
@@ -671,7 +669,7 @@ class MainActivity : AppCompatActivity() {
                 if (bookmark.title.contains(lower, ignoreCase = true) || bookmark.url.contains(lower, ignoreCase = true)) {
                     if (seen.add(bookmark.url)) {
                         val display = "${bookmark.url} (bookmark)"
-                        val icon = loadDrawableForBookmark(bookmark)
+                        val icon = loadDrawableForBookmark(bookmark) ?: defaultFavicon
                         suggestions.add(SuggestionItem(display, bookmark.title, bookmark.url, icon, SuggestionType.BOOKMARK))
                         if (suggestions.size >= 10) break
                     }
@@ -906,7 +904,8 @@ class MainActivity : AppCompatActivity() {
         val recycler = view.findViewById<RecyclerView>(R.id.listRecycler)
         recycler.layoutManager = LinearLayoutManager(this)
         val entries = historyEntries.asReversed().map {
-            DialogEntry(it.title, it.url, loadDrawableForUrl(it.url) ?: defaultFavicon)
+            val icon = loadDrawableForPath(it.iconPath) ?: loadDrawableForUrl(it.url) ?: defaultFavicon
+            DialogEntry(it.title, it.url, icon)
         }
         recycler.adapter = DialogListAdapter(entries) { entry ->
             loadInActiveTab(entry.subtitle)
@@ -934,7 +933,7 @@ class MainActivity : AppCompatActivity() {
         val recycler = view.findViewById<RecyclerView>(R.id.listRecycler)
         recycler.layoutManager = LinearLayoutManager(this)
         val dialogEntries = entries.map {
-            DialogEntry(it.title, it.url, loadDrawableForBookmark(it) ?: defaultFavicon)
+            DialogEntry(it.title, it.url, loadDrawableForBookmark(it))
         }
         recycler.adapter = DialogListAdapter(dialogEntries) { entry ->
             loadInActiveTab(entry.subtitle)
@@ -1003,7 +1002,8 @@ class MainActivity : AppCompatActivity() {
     private fun recordHistory(title: String, url: String) {
         if (url.isBlank() || url.startsWith("about:")) return
         historyEntries.removeAll { it.url == url }
-        historyEntries.add(HistoryEntry(title, url, System.currentTimeMillis()))
+        val iconPath = getFaviconPathForUrl(url)
+        historyEntries.add(HistoryEntry(title, url, System.currentTimeMillis(), iconPath))
         if (MAX_HISTORY != Int.MAX_VALUE && historyEntries.size > MAX_HISTORY) {
             historyEntries.subList(0, historyEntries.size - MAX_HISTORY).clear()
         }
@@ -1018,6 +1018,7 @@ class MainActivity : AppCompatActivity() {
             obj.put("title", entry.title)
             obj.put("url", entry.url)
             obj.put("timestamp", entry.timestamp)
+            entry.iconPath?.let { obj.put("icon", it) }
             array.put(obj)
         }
         prefs.edit().putString(KEY_HISTORY, array.toString()).apply()
@@ -1034,7 +1035,8 @@ class MainActivity : AppCompatActivity() {
                 if (url.isNullOrBlank()) continue
                 val title = obj.optString("title", getHostForStatus(url))
                 val timestamp = obj.optLong("timestamp", System.currentTimeMillis())
-                historyEntries.add(HistoryEntry(title, url, timestamp))
+                val icon = obj.optString("icon", null)
+                historyEntries.add(HistoryEntry(title, url, timestamp, icon.takeIf { !it.isNullOrBlank() }))
             }
         } catch (_: Exception) {
             historyEntries.clear()
@@ -1289,7 +1291,47 @@ class MainActivity : AppCompatActivity() {
         return loadFaviconDrawable(host)
     }
 
-    private fun saveFavicon(host: String, bitmap: Bitmap): Drawable {
+    private fun updateBookmarkIconPath(url: String, iconPath: String) {
+        val raw = loadBookmarksRaw()
+        val existing = findBookmarkEntry(url, raw) ?: return
+        val current = parseBookmarkEntry(existing)
+        if (current.iconPath == iconPath) return
+        raw.remove(existing)
+        val updated = buildBookmarkRecord(current.title, current.url, iconPath)
+        raw.add(updated)
+        saveBookmarksRaw(raw)
+    }
+
+    private fun updateHistoryIconPath(url: String, iconPath: String) {
+        var changed = false
+        for (i in historyEntries.indices) {
+            val entry = historyEntries[i]
+            if (entry.url == url && entry.iconPath != iconPath) {
+                historyEntries[i] = entry.copy(iconPath = iconPath)
+                changed = true
+            }
+        }
+        if (changed) {
+            saveHistory()
+            if (binding.urlBar.hasFocus()) {
+                updateSuggestions(binding.urlBar.text?.toString().orEmpty())
+            }
+        }
+    }
+
+    private fun saveFaviconForUrl(url: String, bitmap: Bitmap): Drawable {
+        val host = hostFromUrl(url)
+        if (host == null) {
+            return BitmapDrawable(resources, bitmap)
+        }
+        val drawable = saveFaviconBitmap(host, bitmap)
+        val path = faviconFile(host).path
+        updateBookmarkIconPath(url, path)
+        updateHistoryIconPath(url, path)
+        return drawable
+    }
+
+    private fun saveFaviconBitmap(host: String, bitmap: Bitmap): Drawable {
         val file = faviconFile(host)
         try {
             file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
@@ -1378,6 +1420,23 @@ class MainActivity : AppCompatActivity() {
 
         override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View {
             return bindView(position, convertView, parent)
+        }
+
+        override fun getFilter(): Filter = object : Filter() {
+            override fun performFiltering(constraint: CharSequence?): FilterResults {
+                return FilterResults().apply {
+                    values = items
+                    count = items.size
+                }
+            }
+
+            override fun publishResults(constraint: CharSequence?, results: FilterResults?) {
+                notifyDataSetChanged()
+            }
+
+            override fun convertResultToString(resultValue: Any?): CharSequence {
+                return (resultValue as? SuggestionItem)?.url ?: ""
+            }
         }
 
         private fun bindView(position: Int, convertView: View?, parent: ViewGroup): View {
