@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      JAVA_VERSION: '17'
+      JAVA_VERSION: '22'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,7 +32,7 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
         with:
-          gradle-version: 8.10.2
+          gradle-version: 8.11.1
           # Allow writes only on main to reduce cache save collisions / failures
           cache-read-only: ${{ github.ref != 'refs/heads/main' }}
           # Disabled cleanup to avoid post-job Gradle 9 cleanup regression
