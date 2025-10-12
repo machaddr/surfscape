@@ -38,6 +38,7 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.core.content.ContextCompat
 import androidx.core.view.children
+import androidx.core.view.doOnLayout
 import androidx.core.view.isVisible
 import androidx.core.widget.addTextChangedListener
 import androidx.lifecycle.lifecycleScope
@@ -150,6 +151,9 @@ class MainActivity : AppCompatActivity() {
         binding.urlBar.setAdapter(suggestionAdapter)
         binding.urlBar.threshold = 1
         binding.urlBar.setDropDownBackgroundResource(R.drawable.bg_suggestion_dropdown)
+        binding.urlInputLayout.doOnLayout {
+            binding.urlBar.dropDownWidth = it.width
+        }
 
         searchEngines = buildSearchEngines()
         setupUiListeners()

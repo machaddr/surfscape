@@ -5,10 +5,7 @@
     <color name="teal_200">#64B5F6</color>
     <color name="black">#000000</color>
     <color name="white">#FFFFFF</color>
-    <color name="suggestion_item_background">#132C4B</color>
-    <color name="suggestion_dropdown_background">#0F223A</color>
-    <color name="suggestion_item_ripple">#335C9EFF</color>
-    <color name="suggestion_text_primary">#E8F1FF</color>
-    <color name="suggestion_text_secondary">#9CB4D8</color>
-    <color name="suggestion_icon_tint">#9CB4D8</color>
+    <color name="suggestion_text_primary">#FFFFFFFF</color>
+    <color name="suggestion_text_secondary">#CCFFFFFF</color>
+    <color name="suggestion_icon_tint">#FFFFFFFF</color>
 </resources>
