@@ -70,4 +70,6 @@
     <string name="suggestion_type_history">History</string>
     <string name="suggestion_type_bookmark">Bookmark</string>
     <string name="suggestion_secondary_format">%1$s - %2$s</string>
+    <string name="tabs_dialog_title">All Tabs</string>
+    <string name="tab_counter_content_description">Show all tabs</string>
 </resources>

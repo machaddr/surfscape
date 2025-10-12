@@ -34,6 +34,7 @@ import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.content.res.AppCompatResources
 import androidx.core.content.ContextCompat
@@ -146,6 +147,8 @@ class MainActivity : AppCompatActivity() {
 
         WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
         CookieManager.getInstance().setAcceptCookie(true)
+
+        updateTabCounter()
 
         suggestionAdapter = SuggestionAdapter(this)
         binding.urlBar.setAdapter(suggestionAdapter)
@@ -271,6 +274,7 @@ class MainActivity : AppCompatActivity() {
         binding.btnSaved.setOnClickListener { showBookmarksDialog() }
         binding.btnAi.setOnClickListener { showAiPlaceholder() }
         binding.btnSettings.setOnClickListener { showSettingsDialog() }
+        binding.tabCounter.setOnClickListener { showTabSwitcherDialog() }
 
         binding.btnNewTab.setOnClickListener {
             val tab = createTab(homepageUrl(), select = true)
@@ -528,6 +532,7 @@ class MainActivity : AppCompatActivity() {
             binding.tabStrip.addView(chip)
         }
         updateTabChipSelection()
+        updateTabCounter()
     }
 
     private fun createTabChip(tab: BrowserTab): Chip {
@@ -566,6 +571,15 @@ class MainActivity : AppCompatActivity() {
                 binding.tabScroll.post { binding.tabScroll.smoothScrollTo(chip.left, 0) }
             }
         }
+    }
+
+    private fun updateTabCounter() {
+        val count = tabs.size
+        binding.tabCounter.text = count.toString()
+        binding.tabCounter.contentDescription = getString(R.string.tab_counter_content_description)
+        val enabled = count > 0
+        binding.tabCounter.isEnabled = enabled
+        binding.tabCounter.alpha = if (enabled) 1f else 0.5f
     }
 
     private fun closeTab(tabId: Long) {
@@ -940,6 +954,35 @@ class MainActivity : AppCompatActivity() {
         updateNavigationState()
     }
 
+    private fun showTabSwitcherDialog() {
+        if (tabs.isEmpty()) {
+            return
+        }
+        val view = layoutInflater.inflate(R.layout.dialog_list, null)
+        val recycler = view.findViewById<RecyclerView>(R.id.listRecycler)
+        recycler.layoutManager = LinearLayoutManager(this)
+        val entries = tabs.mapIndexed { index, tab ->
+            val title = tab.title.takeIf { it.isNotBlank() } ?: getString(R.string.default_tab_title)
+            val subtitle = if (tab.url.isBlank()) getString(R.string.status_ready) else getHostForStatus(tab.url)
+            DialogEntry(index + 1, title, subtitle, tab.faviconDrawable ?: defaultFavicon)
+        }
+        lateinit var dialog: AlertDialog
+        val adapter = DialogListAdapter(entries) { entry ->
+            val targetTab = tabs.getOrNull(entry.index - 1)
+            if (targetTab != null) {
+                selectTab(targetTab.id)
+            }
+            dialog.dismiss()
+        }
+        recycler.adapter = adapter
+        dialog = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.tabs_dialog_title)
+            .setView(view)
+            .setNegativeButton(android.R.string.cancel, null)
+            .create()
+        dialog.show()
+    }
+
     private fun showHistoryDialog() {
         if (historyEntries.isEmpty()) {
             Toast.makeText(this, getString(R.string.history_empty), Toast.LENGTH_SHORT).show()
@@ -953,10 +996,13 @@ class MainActivity : AppCompatActivity() {
             val title = item.title.takeIf { it.isNotBlank() } ?: getHostForStatus(item.url)
             DialogEntry(index + 1, title, item.url, icon)
         }
-        recycler.adapter = DialogListAdapter(entries) { entry ->
+        lateinit var dialog: AlertDialog
+        val adapter = DialogListAdapter(entries) { entry ->
             loadInActiveTab(entry.subtitle)
+            dialog.dismiss()
         }
-        MaterialAlertDialogBuilder(this)
+        recycler.adapter = adapter
+        val builder = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.history_title)
             .setView(view)
             .setPositiveButton(R.string.history_clear) { _, _ ->
@@ -966,7 +1012,8 @@ class MainActivity : AppCompatActivity() {
                 updateNavigationState()
             }
             .setNegativeButton(android.R.string.cancel, null)
-            .show()
+        dialog = builder.create()
+        dialog.show()
     }
 
     private fun showBookmarksDialog() {
@@ -982,14 +1029,18 @@ class MainActivity : AppCompatActivity() {
             val title = entry.title.takeIf { it.isNotBlank() } ?: getHostForStatus(entry.url)
             DialogEntry(index + 1, title, entry.url, loadDrawableForBookmark(entry))
         }
-        recycler.adapter = DialogListAdapter(dialogEntries) { entry ->
+        lateinit var dialog: AlertDialog
+        val adapter = DialogListAdapter(dialogEntries) { entry ->
             loadInActiveTab(entry.subtitle)
+            dialog.dismiss()
         }
-        MaterialAlertDialogBuilder(this)
+        recycler.adapter = adapter
+        dialog = MaterialAlertDialogBuilder(this)
             .setTitle(R.string.bookmarks_title)
             .setView(view)
             .setNegativeButton(android.R.string.cancel, null)
-            .show()
+            .create()
+        dialog.show()
     }
 
     private fun loadBookmarksRaw(): MutableSet<String> {
