@@ -1610,11 +1610,6 @@ class MainActivity : AppCompatActivity() {
         private val onEntryClick: (DialogEntry) -> Unit
     ) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
 
-        private companion object {
-            private const val TYPE_SECTION = 0
-            private const val TYPE_ENTRY = 1
-        }
-
         inner class SectionViewHolder(view: View) : RecyclerView.ViewHolder(view) {
             val title: TextView = view.findViewById(R.id.sectionTitle)
         }
@@ -1628,14 +1623,14 @@ class MainActivity : AppCompatActivity() {
 
         override fun getItemViewType(position: Int): Int {
             return when (items[position]) {
-                is DialogListItem.Section -> TYPE_SECTION
-                is DialogListItem.Entry -> TYPE_ENTRY
+                is DialogListItem.Section -> DIALOG_TYPE_SECTION
+                is DialogListItem.Entry -> DIALOG_TYPE_ENTRY
             }
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
             val inflater = LayoutInflater.from(parent.context)
-            return if (viewType == TYPE_SECTION) {
+            return if (viewType == DIALOG_TYPE_SECTION) {
                 val view = inflater.inflate(R.layout.item_dialog_section, parent, false)
                 SectionViewHolder(view)
             } else {
@@ -1815,6 +1810,8 @@ class MainActivity : AppCompatActivity() {
         private const val BOOKMARK_DELIMITER = "||"
         private const val MAX_HISTORY = Int.MAX_VALUE
         private const val DAY_MS = 24L * 60L * 60L * 1000L
+        private const val DIALOG_TYPE_SECTION = 0
+        private const val DIALOG_TYPE_ENTRY = 1
         private val HTML_LINK_REGEX = Regex("<A\\s+[^>]*HREF\\s*=\\s*\\\"([^\\\"]+)\\\"[^>]*>(.*?)</A>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
         private val SCHEME_REGEX = Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://")
     }
