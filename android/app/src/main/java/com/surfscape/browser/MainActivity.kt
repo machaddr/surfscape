@@ -59,12 +59,15 @@ import java.io.File
 import java.io.InputStream
 import java.net.URLEncoder
 import java.util.ArrayList
-import java.util.LinkedHashSet
 import java.util.Calendar
+import java.util.Collections
+import java.util.LinkedHashSet
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -84,7 +87,8 @@ class MainActivity : AppCompatActivity() {
         var isLoading: Boolean = false,
         var canGoBack: Boolean = false,
         var canGoForward: Boolean = false,
-        var faviconDrawable: Drawable? = null
+        var faviconDrawable: Drawable? = null,
+        var pendingPdfUrl: String? = null
     )
 
     private lateinit var binding: ActivityMainBinding
@@ -114,6 +118,7 @@ class MainActivity : AppCompatActivity() {
     private val defaultFavicon by lazy { ContextCompat.getDrawable(this, R.drawable.ic_site_default) }
     private lateinit var suggestionAdapter: SuggestionAdapter
     private var bookmarkCache: List<BookmarkEntry>? = null
+    private val bookmarkFaviconPrefetch = Collections.synchronizedSet(mutableSetOf<String>())
     private var statusOverrideMessage: String? = null
     private var lastStatusMessage: String = ""
 
@@ -167,6 +172,17 @@ class MainActivity : AppCompatActivity() {
         binding.urlBar.setDropDownBackgroundResource(R.drawable.bg_suggestion_dropdown)
         binding.urlInputLayout.doOnLayout {
             binding.urlBar.dropDownWidth = it.width
+        }
+        binding.swipeRefresh.setOnRefreshListener {
+            val tab = activeTab
+            if (tab != null) {
+                tab.webView.reload()
+            } else {
+                binding.swipeRefresh.isRefreshing = false
+            }
+        }
+        binding.swipeRefresh.setOnChildScrollUpCallback { _, _ ->
+            activeTab?.webView?.canScrollVertically(-1) == true
         }
 
         searchEngines = buildSearchEngines()
@@ -447,22 +463,44 @@ class MainActivity : AppCompatActivity() {
         webView.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val uri = request?.url ?: return false
+                if (request?.isForMainFrame == true && handlePdfNavigation(tab, view, uri.toString())) {
+                    return true
+                }
                 return handleExternalUri(uri)
             }
 
             override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                if (handlePdfNavigation(tab, view, url)) {
+                    return true
+                }
                 return handleExternalUrl(url)
             }
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 val safeUrl = url ?: return
-                tab.url = safeUrl
+                val viewerUrl = isPdfViewerUrl(safeUrl)
+                if (viewerUrl && tab.pendingPdfUrl != null) {
+                    val original = tab.pendingPdfUrl!!
+                    tab.url = original
+                    if (tab.id == activeTabId) {
+                        ignoreUrlCallbacks = true
+                        binding.urlBar.setText(original)
+                        binding.urlBar.setSelection(original.length)
+                        ignoreUrlCallbacks = false
+                        updateStatus(getHostForStatus(original))
+                    }
+                } else {
+                    tab.url = safeUrl
+                    tab.pendingPdfUrl = null
+                }
                 tab.isLoading = true
                 tab.canGoBack = tab.webView.canGoBack()
                 tab.canGoForward = tab.webView.canGoForward()
                 if (tab.id == activeTabId) {
-                    updateUrlBar(safeUrl)
-                    updateStatus(getHostForStatus(safeUrl))
+                    if (!(viewerUrl && tab.pendingPdfUrl != null)) {
+                        updateUrlBar(safeUrl)
+                        updateStatus(getHostForStatus(tab.url))
+                    }
                     updateNavigationState()
                     updateReloadButton(true)
                 }
@@ -479,6 +517,7 @@ class MainActivity : AppCompatActivity() {
                     updateStatus(getHostForStatus(tab.url))
                     updateNavigationState()
                     updateReloadButton(false)
+                    binding.swipeRefresh.isRefreshing = false
                     updateBookmarkIcon()
                 }
                 tab.faviconDrawable = loadDrawableForUrl(tab.url) ?: tab.faviconDrawable
@@ -490,6 +529,9 @@ class MainActivity : AppCompatActivity() {
                 updateNavigationState()
                 prefs.edit().putString(KEY_LAST_URL, tab.url).apply()
                 persistSession()
+                if (isPdfViewerUrl(safeUrl)) {
+                    tab.pendingPdfUrl = null
+                }
             }
 
             override fun onReceivedError(
@@ -499,6 +541,7 @@ class MainActivity : AppCompatActivity() {
             ) {
                 if (tab.id == activeTabId) {
                     updateStatus(getString(R.string.status_error))
+                    binding.swipeRefresh.isRefreshing = false
                 }
                 Toast.makeText(
                     this@MainActivity,
@@ -509,6 +552,9 @@ class MainActivity : AppCompatActivity() {
         }
 
         webView.setDownloadListener { url, _, _, _, _ ->
+            if (handlePdfNavigation(tab, webView, url)) {
+                return@setDownloadListener
+            }
             if (handleExternalUrl(url)) {
                 Toast.makeText(this, getString(R.string.opening_external), Toast.LENGTH_SHORT).show()
             }
@@ -1462,6 +1508,7 @@ class MainActivity : AppCompatActivity() {
             .filter { it.url.isNotBlank() }
             .sortedBy { it.title.lowercase() }
         bookmarkCache = list
+        ensureBookmarkFavicons(list)
         return list
     }
 
@@ -1471,6 +1518,28 @@ class MainActivity : AppCompatActivity() {
 
     private fun loadDrawableForBookmark(entry: BookmarkEntry): Drawable? {
         return loadDrawableForPath(entry.iconPath) ?: loadDrawableForUrl(entry.url) ?: defaultFavicon
+    }
+
+    private fun ensureBookmarkFavicons(entries: List<BookmarkEntry>) {
+        val missing = entries.asSequence()
+            .filter { shouldPrefetchBookmarkIcon(it) }
+            .map { it.url }
+            .filter { it.isNotBlank() }
+            .toSet()
+        if (missing.isNotEmpty()) {
+            preloadFaviconsForUrls(missing)
+        }
+    }
+
+    private fun shouldPrefetchBookmarkIcon(entry: BookmarkEntry): Boolean {
+        val path = entry.iconPath
+        if (!path.isNullOrBlank()) {
+            val file = File(path)
+            if (file.exists()) {
+                return false
+            }
+        }
+        return true
     }
 
     private fun loadDrawableForPath(path: String?): Drawable? {
@@ -1516,8 +1585,31 @@ class MainActivity : AppCompatActivity() {
 
     private fun preloadFaviconsForUrls(urls: Set<String>) {
         if (urls.isEmpty()) return
+        val unique = mutableListOf<String>()
+        synchronized(bookmarkFaviconPrefetch) {
+            urls.forEach { url ->
+                if (bookmarkFaviconPrefetch.add(url)) {
+                    unique.add(url)
+                }
+            }
+        }
+        if (unique.isEmpty()) return
         lifecycleScope.launch(Dispatchers.IO) {
-            urls.forEach { fetchFaviconForUrl(it) }
+            try {
+                unique.chunked(6).forEach { chunk ->
+                    chunk.map { async { fetchFaviconForUrl(it) } }.awaitAll()
+                }
+                withContext(Dispatchers.Main) {
+                    if (binding.urlBar.hasFocus()) {
+                        updateSuggestions(binding.urlBar.text?.toString().orEmpty())
+                    }
+                    updateNavigationState()
+                }
+            } finally {
+                synchronized(bookmarkFaviconPrefetch) {
+                    bookmarkFaviconPrefetch.removeAll(unique)
+                }
+            }
         }
     }
 
@@ -1761,6 +1853,40 @@ class MainActivity : AppCompatActivity() {
         return handleExternalUri(uri)
     }
 
+    private fun handlePdfNavigation(tab: BrowserTab, webView: WebView?, url: String?): Boolean {
+        val target = url ?: return false
+        if (!isPdfUrl(target) || isPdfViewerUrl(target)) {
+            return false
+        }
+        tab.pendingPdfUrl = target
+        tab.url = target
+        val viewerUrl = buildPdfViewerUrl(target)
+        webView?.loadUrl(viewerUrl)
+        if (tab.id == activeTabId) {
+            ignoreUrlCallbacks = true
+            binding.urlBar.setText(target)
+            binding.urlBar.setSelection(target.length)
+            ignoreUrlCallbacks = false
+            updateStatus(getHostForStatus(target))
+        }
+        return true
+    }
+
+    private fun isPdfUrl(url: String?): Boolean {
+        if (url.isNullOrBlank()) return false
+        val normalized = url.substringBefore('#').substringBefore('?').lowercase()
+        return normalized.endsWith(".pdf")
+    }
+
+    private fun isPdfViewerUrl(url: String?): Boolean {
+        if (url.isNullOrBlank()) return false
+        return url.startsWith(PDF_VIEWER_PREFIX, ignoreCase = true)
+    }
+
+    private fun buildPdfViewerUrl(originalUrl: String): String {
+        return PDF_VIEWER_PREFIX + Uri.encode(originalUrl)
+    }
+
     private fun handleExternalUri(uri: Uri): Boolean {
         val scheme = uri.scheme?.lowercase() ?: return false
         if (scheme == "http" || scheme == "https") {
@@ -1810,6 +1936,7 @@ class MainActivity : AppCompatActivity() {
         private const val BOOKMARK_DELIMITER = "||"
         private const val MAX_HISTORY = Int.MAX_VALUE
         private const val DAY_MS = 24L * 60L * 60L * 1000L
+        private const val PDF_VIEWER_PREFIX = "https://drive.google.com/viewerng/viewer?embedded=true&url="
         private const val DIALOG_TYPE_SECTION = 0
         private const val DIALOG_TYPE_ENTRY = 1
         private val HTML_LINK_REGEX = Regex("<A\\s+[^>]*HREF\\s*=\\s*\\\"([^\\\"]+)\\\"[^>]*>(.*?)</A>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
