@@ -3,6 +3,7 @@ package com.surfscape.browser
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Context
+import android.content.res.ColorStateList
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -93,7 +94,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var searchEngines: List<SearchEngine>
     private data class HistoryEntry(val title: String, val url: String, val timestamp: Long, val iconPath: String?)
     private data class BookmarkEntry(val title: String, val url: String, val iconPath: String?)
-    private data class DialogEntry(val title: String, val subtitle: String, val icon: Drawable?)
+    private data class DialogEntry(val index: Int, val title: String, val subtitle: String, val icon: Drawable?)
     private data class SuggestionItem(val display: String, val secondary: String?, val url: String, val icon: Drawable?, val type: SuggestionType)
     private enum class SuggestionType { HISTORY, BOOKMARK }
 
@@ -148,7 +149,7 @@ class MainActivity : AppCompatActivity() {
         suggestionAdapter = SuggestionAdapter(this)
         binding.urlBar.setAdapter(suggestionAdapter)
         binding.urlBar.threshold = 1
-        binding.urlBar.setDropDownBackgroundResource(android.R.color.white)
+        binding.urlBar.setDropDownBackgroundResource(R.drawable.bg_suggestion_dropdown)
 
         searchEngines = buildSearchEngines()
         setupUiListeners()
@@ -536,6 +537,8 @@ class MainActivity : AppCompatActivity() {
         chip.chipIcon = tab.faviconDrawable ?: defaultFavicon
         chip.isChipIconVisible = true
         chip.chipIconTint = null
+        chip.checkedIcon = null
+        chip.isCheckedIconVisible = false
         chip.setOnClickListener { selectTab(tab.id) }
         chip.setOnCloseIconClickListener { closeTab(tab.id) }
         chip.tag = tab.id
@@ -553,6 +556,8 @@ class MainActivity : AppCompatActivity() {
             chip.chipIcon = tab.faviconDrawable ?: defaultFavicon
             chip.chipIconTint = null
             chip.isChipIconVisible = true
+            chip.checkedIcon = null
+            chip.isCheckedIconVisible = false
             if (chip.isChecked) {
                 binding.tabScroll.post { binding.tabScroll.smoothScrollTo(chip.left, 0) }
             }
@@ -652,13 +657,16 @@ class MainActivity : AppCompatActivity() {
         val lower = trimmed.lowercase()
         val suggestions = mutableListOf<SuggestionItem>()
         val seen = mutableSetOf<String>()
+        val historyLabel = getString(R.string.suggestion_type_history)
+        val bookmarkLabel = getString(R.string.suggestion_type_bookmark)
 
         for (entry in historyEntries.asReversed()) {
             if (entry.title.contains(lower, ignoreCase = true) || entry.url.contains(lower, ignoreCase = true)) {
                 if (seen.add(entry.url)) {
-                    val display = "${entry.url} (history)"
+                    val display = entry.title.takeIf { it.isNotBlank() } ?: getHostForStatus(entry.url)
+                    val secondary = getString(R.string.suggestion_secondary_format, historyLabel, entry.url)
                     val icon = loadDrawableForPath(entry.iconPath) ?: loadDrawableForUrl(entry.url) ?: defaultFavicon
-                    suggestions.add(SuggestionItem(display, entry.title, entry.url, icon, SuggestionType.HISTORY))
+                    suggestions.add(SuggestionItem(display, secondary, entry.url, icon, SuggestionType.HISTORY))
                     if (suggestions.size >= 10) break
                 }
             }
@@ -668,9 +676,12 @@ class MainActivity : AppCompatActivity() {
             for (bookmark in bookmarkEntries()) {
                 if (bookmark.title.contains(lower, ignoreCase = true) || bookmark.url.contains(lower, ignoreCase = true)) {
                     if (seen.add(bookmark.url)) {
-                        val display = "${bookmark.url} (bookmark)"
+                        val display = bookmark.title
+                            .takeIf { it.isNotBlank() }
+                            ?: getHostForStatus(bookmark.url)
+                        val secondary = getString(R.string.suggestion_secondary_format, bookmarkLabel, bookmark.url)
                         val icon = loadDrawableForBookmark(bookmark) ?: defaultFavicon
-                        suggestions.add(SuggestionItem(display, bookmark.title, bookmark.url, icon, SuggestionType.BOOKMARK))
+                        suggestions.add(SuggestionItem(display, secondary, bookmark.url, icon, SuggestionType.BOOKMARK))
                         if (suggestions.size >= 10) break
                     }
                 }
@@ -716,6 +727,15 @@ class MainActivity : AppCompatActivity() {
 
     private fun updateStatus(text: String) {
         binding.statusBar.text = if (text.isBlank()) getString(R.string.status_ready) else text
+    }
+
+    private fun statusForActiveTab(): String {
+        val currentUrl = activeTab?.url
+        return if (currentUrl.isNullOrBlank()) {
+            getString(R.string.status_ready)
+        } else {
+            getHostForStatus(currentUrl)
+        }
     }
 
     private fun updateWindowTitle(tab: BrowserTab) {
@@ -765,13 +785,35 @@ class MainActivity : AppCompatActivity() {
         val btnExportBookmarks = content.findViewById<MaterialButton>(R.id.btnExportBookmarks)
 
         homepageInput.setText(homepageUrl())
-        val adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_list_item_1,
-            searchEngines.map { it.label }
-        )
-        searchInput.setAdapter(adapter)
-        searchInput.setText(currentSearchEngine().label, false)
+        val engineLabels = searchEngines.map { it.label }
+        var selectedEngineIndex = engineLabels.indexOf(currentSearchEngine().label).takeIf { it >= 0 } ?: 0
+        var isSearchDialogShowing = false
+        searchInput.setText(engineLabels[selectedEngineIndex], false)
+        searchInput.keyListener = null
+        searchInput.isCursorVisible = false
+
+        fun showSearchEnginePicker() {
+            if (isSearchDialogShowing) return
+            searchInput.clearFocus()
+            val dialog = MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.settings_search_engine_label)
+                .setSingleChoiceItems(engineLabels.toTypedArray(), selectedEngineIndex) { dialog, which ->
+                    selectedEngineIndex = which
+                    searchInput.setText(engineLabels[which], false)
+                    dialog.dismiss()
+                }
+                .setNegativeButton(android.R.string.cancel, null)
+                .show()
+            isSearchDialogShowing = true
+            dialog.setOnDismissListener { isSearchDialogShowing = false }
+        }
+
+        searchInput.setOnClickListener { showSearchEnginePicker() }
+        searchInput.setOnFocusChangeListener { _, hasFocus ->
+            if (hasFocus) {
+                showSearchEnginePicker()
+            }
+        }
 
         val initialDark = prefBoolean(KEY_DARK_MODE, true)
         val initialShowToolbar = prefBoolean(KEY_SHOW_TOOLBAR, true)
@@ -826,8 +868,7 @@ class MainActivity : AppCompatActivity() {
                     SCHEME_REGEX.containsMatchIn(homepageValue) -> homepageValue
                     else -> "https://$homepageValue"
                 }
-                val chosenEngine = searchEngines.firstOrNull { it.label == searchInput.text.toString() }
-                    ?: currentSearchEngine()
+                val chosenEngine = searchEngines.getOrNull(selectedEngineIndex) ?: currentSearchEngine()
                 val newDark = switchDarkMode.isChecked
                 val newShowToolbar = switchShowToolbar.isChecked
                 val newJs = switchJavascript.isChecked
@@ -903,9 +944,10 @@ class MainActivity : AppCompatActivity() {
         val view = layoutInflater.inflate(R.layout.dialog_list, null)
         val recycler = view.findViewById<RecyclerView>(R.id.listRecycler)
         recycler.layoutManager = LinearLayoutManager(this)
-        val entries = historyEntries.asReversed().map {
-            val icon = loadDrawableForPath(it.iconPath) ?: loadDrawableForUrl(it.url) ?: defaultFavicon
-            DialogEntry(it.title, it.url, icon)
+        val entries = historyEntries.asReversed().mapIndexed { index, item ->
+            val icon = loadDrawableForPath(item.iconPath) ?: loadDrawableForUrl(item.url) ?: defaultFavicon
+            val title = item.title.takeIf { it.isNotBlank() } ?: getHostForStatus(item.url)
+            DialogEntry(index + 1, title, item.url, icon)
         }
         recycler.adapter = DialogListAdapter(entries) { entry ->
             loadInActiveTab(entry.subtitle)
@@ -932,8 +974,9 @@ class MainActivity : AppCompatActivity() {
         val view = layoutInflater.inflate(R.layout.dialog_list, null)
         val recycler = view.findViewById<RecyclerView>(R.id.listRecycler)
         recycler.layoutManager = LinearLayoutManager(this)
-        val dialogEntries = entries.map {
-            DialogEntry(it.title, it.url, loadDrawableForBookmark(it))
+        val dialogEntries = entries.mapIndexed { index, entry ->
+            val title = entry.title.takeIf { it.isNotBlank() } ?: getHostForStatus(entry.url)
+            DialogEntry(index + 1, title, entry.url, loadDrawableForBookmark(entry))
         }
         recycler.adapter = DialogListAdapter(dialogEntries) { entry ->
             loadInActiveTab(entry.subtitle)
@@ -1113,6 +1156,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun importBookmarksFromUri(uri: Uri) {
+        updateStatus(getString(R.string.status_importing_bookmarks))
         lifecycleScope.launch(Dispatchers.IO) {
             val imported = try {
                 val preview = contentResolver.openInputStream(uri)?.use { input ->
@@ -1139,6 +1183,7 @@ class MainActivity : AppCompatActivity() {
             } catch (t: Throwable) {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(this@MainActivity, getString(R.string.bookmarks_import_failed), Toast.LENGTH_SHORT).show()
+                    updateStatus(statusForActiveTab())
                 }
                 return@launch
             }
@@ -1155,6 +1200,7 @@ class MainActivity : AppCompatActivity() {
                         Toast.makeText(this@MainActivity, getString(R.string.bookmarks_import_success), Toast.LENGTH_SHORT).show()
                     }
                 }
+                updateStatus(statusForActiveTab())
             }
         }
     }
@@ -1379,6 +1425,7 @@ class MainActivity : AppCompatActivity() {
     ) : RecyclerView.Adapter<DialogListAdapter.ViewHolder>() {
 
         inner class ViewHolder(view: View) : RecyclerView.ViewHolder(view) {
+            val index: TextView = view.findViewById(R.id.itemIndex)
             val icon: ImageView = view.findViewById(R.id.itemIcon)
             val title: TextView = view.findViewById(R.id.itemTitle)
             val subtitle: TextView = view.findViewById(R.id.itemSubtitle)
@@ -1392,6 +1439,7 @@ class MainActivity : AppCompatActivity() {
 
         override fun onBindViewHolder(holder: ViewHolder, position: Int) {
             val entry = items[position]
+            holder.index.text = "${entry.index}."
             holder.title.text = entry.title
             holder.subtitle.text = entry.subtitle
             holder.icon.setImageDrawable(entry.icon ?: defaultFavicon)
@@ -1440,7 +1488,8 @@ class MainActivity : AppCompatActivity() {
         }
 
         private fun bindView(position: Int, convertView: View?, parent: ViewGroup): View {
-            val view = convertView ?: LayoutInflater.from(parent.context)
+            val context = parent.context
+            val view = convertView ?: LayoutInflater.from(context)
                 .inflate(R.layout.item_suggestion, parent, false)
             val title = view.findViewById<TextView>(R.id.suggestionTitle)
             val subtitle = view.findViewById<TextView>(R.id.suggestionSubtitle)
@@ -1453,7 +1502,14 @@ class MainActivity : AppCompatActivity() {
                 subtitle.text = item.secondary
                 subtitle.visibility = View.VISIBLE
             }
-            icon.setImageDrawable(item.icon ?: defaultFavicon)
+            val itemIcon = item.icon
+            if (itemIcon != null) {
+                icon.imageTintList = null
+                icon.setImageDrawable(itemIcon)
+            } else {
+                icon.imageTintList = ColorStateList.valueOf(ContextCompat.getColor(context, R.color.suggestion_icon_tint))
+                icon.setImageDrawable(defaultFavicon)
+            }
             return view
         }
     }

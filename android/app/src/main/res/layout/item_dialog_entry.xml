@@ -9,6 +9,16 @@
     android:paddingTop="10dp"
     android:paddingBottom="10dp">
 
+    <TextView
+        android:id="@+id/itemIndex"
+        android:layout_width="32dp"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="12dp"
+        android:gravity="center"
+        android:textColor="@android:color/darker_gray"
+        android:textStyle="bold"
+        android:textSize="14sp" />
+
     <ImageView
         android:id="@+id/itemIcon"
         android:layout_width="24dp"

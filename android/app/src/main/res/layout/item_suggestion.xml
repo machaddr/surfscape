@@ -7,7 +7,9 @@
     android:paddingEnd="12dp"
     android:paddingTop="8dp"
     android:paddingBottom="8dp"
-    android:gravity="center_vertical">
+    android:minHeight="52dp"
+    android:gravity="center_vertical"
+    android:background="@drawable/bg_suggestion_item">
 
     <ImageView
         android:id="@+id/suggestionIcon"
@@ -27,7 +29,7 @@
             android:id="@+id/suggestionTitle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textColor="@android:color/black"
+            android:textColor="@color/suggestion_text_primary"
             android:textSize="15sp"
             android:maxLines="1"
             android:ellipsize="end" />
@@ -36,7 +38,7 @@
             android:id="@+id/suggestionSubtitle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textColor="@android:color/darker_gray"
+            android:textColor="@color/suggestion_text_secondary"
             android:textSize="12sp"
             android:maxLines="1"
             android:ellipsize="end" />
