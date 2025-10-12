@@ -33,6 +33,7 @@ import android.widget.Filter.FilterResults
 import android.widget.ImageView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -149,6 +150,7 @@ class MainActivity : AppCompatActivity() {
         CookieManager.getInstance().setAcceptCookie(true)
 
         updateTabCounter()
+        setupBackNavigation()
 
         suggestionAdapter = SuggestionAdapter(this)
         binding.urlBar.setAdapter(suggestionAdapter)
@@ -206,13 +208,17 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    override fun onBackPressed() {
-        val tab = activeTab
-        if (tab?.webView?.canGoBack() == true) {
-            tab.webView.goBack()
-        } else {
-            super.onBackPressed()
-        }
+    private fun setupBackNavigation() {
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val tab = activeTab
+                if (tab?.webView?.canGoBack() == true) {
+                    tab.webView.goBack()
+                } else {
+                    finish()
+                }
+            }
+        })
     }
 
     private fun setupUiListeners() {
@@ -366,7 +372,6 @@ class MainActivity : AppCompatActivity() {
 
         with(webView.settings) {
             domStorageEnabled = true
-            databaseEnabled = true
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             builtInZoomControls = true
             displayZoomControls = false
@@ -1080,8 +1085,8 @@ class MainActivity : AppCompatActivity() {
                     val obj = JSONObject(entry)
                     val url = obj.optString("url")
                     val title = obj.optString("title", getHostForStatus(url))
-                    val icon = obj.optString("icon", null)
-                    BookmarkEntry(title, url, icon.takeIf { !it.isNullOrBlank() })
+                    val icon = obj.optString("icon").takeIf { it.isNotBlank() }
+                    BookmarkEntry(title, url, icon)
                 } catch (_: Exception) {
                     val url = entry
                     BookmarkEntry(getHostForStatus(url), url, getFaviconPathForUrl(url))
@@ -1133,8 +1138,8 @@ class MainActivity : AppCompatActivity() {
                 if (url.isNullOrBlank()) continue
                 val title = obj.optString("title", getHostForStatus(url))
                 val timestamp = obj.optLong("timestamp", System.currentTimeMillis())
-                val icon = obj.optString("icon", null)
-                historyEntries.add(HistoryEntry(title, url, timestamp, icon.takeIf { !it.isNullOrBlank() }))
+                val icon = obj.optString("icon").takeIf { it.isNotBlank() }
+                historyEntries.add(HistoryEntry(title, url, timestamp, icon))
             }
         } catch (_: Exception) {
             historyEntries.clear()
@@ -1277,7 +1282,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (url.isBlank()) continue
                 findBookmarkEntry(url, target)?.let { target.remove(it) }
-                val icon = (element as? JSONObject)?.optString("icon", null)
+                val icon = (element as? JSONObject)?.optString("icon")?.takeIf { it.isNotBlank() }
                 target.add(buildBookmarkRecord(title, url, icon))
                 imported++
             }
