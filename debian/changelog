@@ -1,3 +1,11 @@
+surfscape (1.2-1) unstable; urgency=medium
+
+  * Version 1.2 release
+  * Fixed icon installation and desktop integration
+  * Improved multi-size icon support
+
+ -- André Machado <machaddr@falanet.org>  Fri, 25 Oct 2025 12:00:00 +0100
+
 surfscape (1.0-1) unstable; urgency=medium
 
   * Initial release of Surfscape
