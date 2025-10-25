@@ -2186,6 +2186,8 @@ class CustomWebEngineView(QWebEngineView):
         super().__init__()
         self.browser = browser
         self.private_mode = private_mode
+        # Legacy fallback for Qt versions without newWindowRequested signal
+        self._legacy_create_window = False
         
         # Performance optimizations
         self._setup_performance_optimizations()
@@ -2206,40 +2208,183 @@ class CustomWebEngineView(QWebEngineView):
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
 
     def contextMenuEvent(self, event):
+        from PyQt6.QtWebEngineCore import QWebEnginePage
+
         menu = QMenu(self)
+        page = self.page()
+        data = None
+        if page and hasattr(page, "contextMenuData"):
+            try:
+                data = page.contextMenuData()
+            except Exception:
+                data = None
+
+        link_url = None
+        image_url = None
+        media_url = None
+        media_type = None
+        selected_text = ""
+        suggested_name = ""
+        is_editable = False
+
+        if data:
+            try:
+                link = data.linkUrl()
+                if link and link.isValid():
+                    link_url = QUrl(link)
+            except Exception:
+                pass
+            try:
+                img = data.imageUrl()
+                if img and img.isValid():
+                    image_url = QUrl(img)
+            except Exception:
+                pass
+            try:
+                media = data.mediaUrl()
+                if media and media.isValid():
+                    media_url = QUrl(media)
+            except Exception:
+                pass
+            try:
+                media_type = data.mediaType()
+            except Exception:
+                media_type = None
+            try:
+                suggested_name = data.mediaFileName()
+            except Exception:
+                suggested_name = ""
+            try:
+                selected_text = data.selectedText()
+            except Exception:
+                selected_text = ""
+            try:
+                is_editable = data.isContentEditable()
+            except Exception:
+                is_editable = False
+
+        # Link-related actions
+        if link_url:
+            open_link_action = menu.addAction("Open Link in New Tab")
+            open_link_action.triggered.connect(lambda url=link_url: self.browser.add_new_tab(url, url.host() or "New Tab"))
+
+            copy_link_action = menu.addAction("Copy Link Address")
+            def _copy_link():
+                try:
+                    text_value = link_url.toString(QUrl.UrlFormattingOption.PrettyDecoded)
+                except Exception:
+                    text_value = link_url.toString()
+                QApplication.clipboard().setText(text_value)
+            copy_link_action.triggered.connect(_copy_link)
+            menu.addSeparator()
+
+        # Media download actions
+        def media_filename(url_obj: QUrl, fallback: str) -> str:
+            if suggested_name:
+                return suggested_name
+            if url_obj and url_obj.isValid():
+                candidate = os.path.basename(url_obj.path())
+                return candidate or fallback
+            return fallback
+
+        media_actions_added = False
+        if image_url:
+            download_image_action = menu.addAction("Download Image")
+            download_image_action.triggered.connect(lambda url=image_url: self._trigger_download(url, media_filename(url, "image")))
+            media_actions_added = True
+
+        media_is_audio = False
+        media_is_video = False
+        if media_type is not None:
+            media_type_str = str(media_type)
+            media_value = getattr(media_type, "value", media_type)
+            media_is_audio = ("audio" in media_type_str.lower()) or media_value == 2
+            media_is_video = ("video" in media_type_str.lower()) or media_value == 3
+        if media_url and (media_is_audio or media_is_video):
+            label = "Download Audio" if media_is_audio and not media_is_video else "Download Video"
+            download_media_action = menu.addAction(label)
+            download_media_action.triggered.connect(lambda url=media_url: self._trigger_download(url, media_filename(url, "media")))
+            media_actions_added = True
         
-        # Get the hit test result
-        hit_test_result = self.page().findChild(QObject, "")
-        
+        if media_actions_added:
+            menu.addSeparator()
+
+        # Editing / clipboard actions
+        if is_editable:
+            cut_action = menu.addAction("Cut")
+            cut_action.triggered.connect(lambda: page.triggerAction(QWebEnginePage.WebAction.Cut))
+            copy_action = menu.addAction("Copy")
+            copy_action.triggered.connect(lambda: page.triggerAction(QWebEnginePage.WebAction.Copy))
+            paste_action = menu.addAction("Paste")
+            paste_action.triggered.connect(lambda: page.triggerAction(QWebEnginePage.WebAction.Paste))
+            menu.addSeparator()
+        elif selected_text:
+            copy_selection_action = menu.addAction("Copy Selection")
+            copy_selection_action.triggered.connect(lambda: page.triggerAction(QWebEnginePage.WebAction.Copy))
+            menu.addSeparator()
+
         # Standard navigation actions
         back_action = menu.addAction("← Back")
         back_action.triggered.connect(self.back)
         back_action.setEnabled(self.history().canGoBack())
-        
+
         forward_action = menu.addAction("→ Forward")
         forward_action.triggered.connect(self.forward)
         forward_action.setEnabled(self.history().canGoForward())
-        
+
         reload_action = menu.addAction("⟳ Reload")
         reload_action.triggered.connect(self.reload)
-        
+
         menu.addSeparator()
-        
+
         # Page actions
         view_source_action = menu.addAction("View Page Source")
         view_source_action.triggered.connect(self.browser.view_source)
-        
+
         print_action = menu.addAction("Print...")
         print_action.triggered.connect(self.browser.print_page)
-        
+
         menu.addSeparator()
-        
+
         # Bookmark action
         bookmark_action = menu.addAction("Add to Bookmarks")
         bookmark_action.triggered.connect(self.browser.toggle_bookmark)
-        
-        # Show the menu
+
         menu.exec(event.globalPos())
+
+    def _trigger_download(self, url: QUrl, suggested_filename: str | None = None):
+        if not url or not url.isValid():
+            return
+        page = self.page()
+        if page is None:
+            return
+        profile = page.profile()
+        filename = (suggested_filename or "").strip()
+        try:
+            if profile:
+                if filename:
+                    profile.download(url, filename)
+                else:
+                    profile.download(url)
+            else:
+                if filename:
+                    page.download(url, filename)
+                else:
+                    page.download(url)
+            if self.browser and hasattr(self.browser, "_notify_download_started"):
+                self.browser._notify_download_started(url)
+        except TypeError:
+            try:
+                profile.download(url)
+            except Exception:
+                pass
+        except Exception as exc:
+            print(f"Failed to start download for {url.toString()}: {exc}")
+
+    def createWindow(self, web_window_type):
+        if getattr(self, "_legacy_create_window", False):
+            return self.browser._create_window_from_create_window(self, web_window_type)
+        return super().createWindow(web_window_type)
 
 # --- Claude AI Integration --------------------------------------------------------------------
 
@@ -3173,6 +3318,28 @@ class Browser(QMainWindow):
         # Initialize settings manager
         self.settings_manager = SettingsManager(self.data_dir)
 
+        # Status bar setup
+        self.status_bar = self.statusBar()
+        self.status_info_label = QLabel("")
+        self.status_hover_label = QLabel("")
+        try:
+            self.status_hover_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        except Exception:
+            pass
+        self.status_hover_label.setStyleSheet("margin-left: 12px;")
+        self.status_hover_label.setMinimumWidth(240)
+        self.status_progress = QProgressBar()
+        self.status_progress.setMaximum(100)
+        self.status_progress.setTextVisible(False)
+        self.status_progress.setFixedWidth(120)
+        self.status_progress.hide()
+        self.status_bar.addWidget(self.status_info_label)
+        self.status_bar.addPermanentWidget(self.status_hover_label, 1)
+        self.status_bar.addPermanentWidget(self.status_progress)
+        self.status_bar.setVisible(self.settings_manager.get('show_status_bar', True))
+        self.status_bar.showMessage("Ready")
+        self._status_default_url = ""
+
         # Theme/font legacy variables
         bg_color = self.settings_manager.get('background_color', 'system')
         font_color = self.settings_manager.get('font_color', '#000000')
@@ -3377,33 +3544,221 @@ class Browser(QMainWindow):
         else:
             _write(file_path, payload)
 
+    def _create_web_view(self, private_mode: bool = False) -> CustomWebEngineView:
+        """Create a web view configured for normal or private browsing."""
+        view = CustomWebEngineView(self, private_mode=private_mode)
+        if private_mode:
+            try:
+                from PyQt6.QtWebEngineCore import QWebEnginePage
+            except ImportError:
+                QWebEnginePage = None
+            if QWebEnginePage is not None:
+                private_page = QWebEnginePage(self.private_profile, view)
+                view.setPage(private_page)
+        return view
+
+    def _attach_web_view(self, browser: CustomWebEngineView, label: str, select: bool = True) -> int:
+        """Add the provided view to the tab widget and wire standard signals."""
+        if not isinstance(browser, CustomWebEngineView):
+            return -1
+
+        if self.settings_manager.get('open_new_tab_next_to_current', True) and self.tabs.count() > 0:
+            insert_index = min(self.tabs.currentIndex() + 1, self.tabs.count())
+        else:
+            insert_index = self.tabs.count()
+
+        if insert_index >= self.tabs.count():
+            tab_index = self.tabs.addTab(browser, label)
+        else:
+            tab_index = self.tabs.insertTab(insert_index, browser, label)
+
+        if select:
+            self.tabs.setCurrentIndex(tab_index)
+
+        browser.urlChanged.connect(lambda qurl, b=browser: self.update_urlbar(qurl, b))
+        browser.urlChanged.connect(lambda qurl, i=tab_index: self._update_tab_favicon(i, qurl))
+        browser.loadFinished.connect(lambda ok, i=tab_index, b=browser: self._on_tab_load_finished(i, b, ok))
+        browser.loadStarted.connect(lambda b=browser: self._on_tab_load_started(b))
+        browser.loadProgress.connect(lambda progress, b=browser: self._on_tab_load_progress(b, progress))
+        page = browser.page()
+        if page:
+            page.iconUrlChanged.connect(lambda _url, i=tab_index, b=browser: self._update_tab_favicon(i, b.url()))
+            try:
+                page.linkHovered.connect(lambda url, b=browser: self._update_status_hover(url, b))
+            except Exception:
+                pass
+            try:
+                cookie_store = page.profile().cookieStore()
+                cookie_store.cookieAdded.connect(self.add_cookie)
+            except Exception:
+                pass
+            supports_new_window_signal = hasattr(page, "newWindowRequested")
+            browser._legacy_create_window = not supports_new_window_signal
+            if supports_new_window_signal:
+                try:
+                    page.newWindowRequested.connect(lambda request, b=browser: self._handle_new_window_request(b, request))
+                except Exception:
+                    browser._legacy_create_window = True
+        self.apply_settings_to_new_tab(browser)
+        if select:
+            QTimer.singleShot(0, lambda b=browser: self._update_status_from_view(b))
+        return tab_index
+
+    def _handle_new_window_request(self, source_view: CustomWebEngineView, request):
+        """Handle window/tab requests coming from web content."""
+        try:
+            requested_url = request.requestedUrl()
+        except Exception:
+            requested_url = QUrl()
+
+        is_user_initiated = True
+        try:
+            is_user_initiated = bool(request.isUserInitiated())
+        except Exception:
+            pass
+
+        if self.settings_manager.get('block_popups', True) and not is_user_initiated:
+            try:
+                request.reject()
+            except Exception:
+                pass
+            self._show_status_message("Popup blocked", 3000)
+            return
+
+        private_mode = getattr(source_view, 'private_mode', False)
+        label = requested_url.host() if requested_url and requested_url.isValid() else ""
+        if not label and requested_url and requested_url.isValid():
+            try:
+                label = requested_url.toDisplayString(QUrl.UrlFormattingOption.RemoveScheme)
+            except Exception:
+                label = requested_url.toDisplayString()
+        label = label or "New Tab"
+        new_view = self._create_web_view(private_mode=private_mode)
+        select_tab = True
+        try:
+            destination = request.destination()
+            dest_name = getattr(destination, "name", str(destination))
+            if dest_name and "Background" in dest_name:
+                select_tab = False
+        except Exception:
+            pass
+        tab_index = self._attach_web_view(new_view, label, select=select_tab)
+
+        try:
+            request.setNewPage(new_view.page())
+            request.accept()
+        except Exception:
+            if requested_url and requested_url.isValid():
+                new_view.setUrl(requested_url)
+            try:
+                request.accept()
+            except Exception:
+                pass
+
+        if tab_index >= 0:
+            self.tabs.setTabText(tab_index, label)
+        if select_tab:
+            self._show_status_message("Opened in new tab", 2000)
+
+    def _create_window_from_create_window(self, source_view: CustomWebEngineView, web_window_type):
+        """Legacy fallback when Qt does not expose newWindowRequested."""
+        if self.settings_manager.get('block_popups', True):
+            # Without request metadata we err on the side of caution.
+            self._show_status_message("Popup blocked", 3000)
+            return None
+        private_mode = getattr(source_view, 'private_mode', False)
+        new_view = self._create_web_view(private_mode=private_mode)
+        self._attach_web_view(new_view, "New Tab", select=True)
+        self._show_status_message("Opened in new tab", 2000)
+        return new_view
+
+    def _update_status_from_view(self, view: CustomWebEngineView | None):
+        if not hasattr(self, 'status_bar'):
+            return
+        if view is None:
+            self.status_info_label.setText("")
+            self._status_default_url = ""
+            self.status_hover_label.setText("")
+            self.status_progress.hide()
+            return
+        try:
+            qurl = view.url()
+        except Exception:
+            qurl = None
+        if not qurl or not isinstance(qurl, QUrl) or qurl.isEmpty():
+            self.status_info_label.setText("")
+            self._status_default_url = ""
+            self.status_hover_label.setText("")
+            return
+        try:
+            display_url = qurl.toDisplayString(QUrl.UrlFormattingOption.RemovePassword)
+        except Exception:
+            display_url = qurl.toDisplayString()
+        self._status_default_url = display_url
+        self.status_hover_label.setText(display_url)
+        scheme = qurl.scheme().lower()
+        host = qurl.host() or display_url
+        if scheme == "https":
+            info = f"Secure | {host}"
+        elif scheme == "http":
+            info = f"Not secure | {host}"
+        elif scheme:
+            info = f"{scheme.upper()} | {host}"
+        else:
+            info = host
+        self.status_info_label.setText(info)
+
+    def _update_status_hover(self, text: str, view: CustomWebEngineView):
+        if not hasattr(self, 'status_bar'):
+            return
+        if view is not self._current_web_view():
+            return
+        if text:
+            self.status_hover_label.setText(text)
+        else:
+            self.status_hover_label.setText(self._status_default_url)
+
+    def _set_status_progress(self, value: int | None, view: CustomWebEngineView):
+        if not hasattr(self, 'status_progress'):
+            return
+        if view is not self._current_web_view():
+            return
+        if value is None or value >= 100:
+            self.status_progress.hide()
+            return
+        self.status_progress.show()
+        try:
+            self.status_progress.setValue(int(max(0, min(100, value))))
+        except Exception:
+            pass
+
+    def _show_status_message(self, text: str, timeout: int = 0):
+        if not hasattr(self, 'status_bar'):
+            return
+        try:
+            self.status_bar.showMessage(text, timeout)
+        except Exception:
+            pass
+
+    def _notify_download_started(self, url: QUrl):
+        if not hasattr(self, 'status_bar'):
+            return
+        try:
+            description = url.fileName() or url.host() or url.toDisplayString()
+        except Exception:
+            description = ""
+        description = description or "download"
+        self._show_status_message(f"Download started: {description}", 3000)
+
     def add_new_tab(self, qurl=None, label="Homepage"):
         if qurl is None:
             qurl = QUrl(self.homepage_url)
+        elif not isinstance(qurl, QUrl):
+            qurl = QUrl(str(qurl))
 
-        browser = CustomWebEngineView(self)
+        browser = self._create_web_view(private_mode=False)
+        self._attach_web_view(browser, label, select=True)
         browser.setUrl(qurl)
-
-        # Add tab based on settings
-        if self.settings_manager.get('open_new_tab_next_to_current', True) and self.tabs.count() > 0:
-            current_index = self.tabs.currentIndex()
-            i = self.tabs.insertTab(current_index + 1, browser, label)
-        else:
-            i = self.tabs.addTab(browser, label)
-        self.tabs.setCurrentIndex(i)
-
-        # Performance: Optimize signal connections
-        browser.urlChanged.connect(lambda qurl, browser=browser: self.update_urlbar(qurl, browser))
-        browser.urlChanged.connect(lambda qurl, i=i: self._update_tab_favicon(i, qurl))
-        browser.loadFinished.connect(lambda _, i=i, browser=browser: self._on_tab_load_finished(i, browser))
-        browser.page().iconUrlChanged.connect(lambda _url, i=i, b=browser: self._update_tab_favicon(i, b.url()))
-        # Use direct bound method via lambda capturing default argument
-        browser.loadStarted.connect(lambda b=browser: self._on_tab_load_started(b))
-        browser.page().profile().cookieStore().cookieAdded.connect(self.add_cookie)  # Add cookie
-        
-        # Apply current settings to the new tab
-        self.apply_settings_to_new_tab(browser)
-        
         return browser
 
     def add_private_tab(self, qurl=None, label="Private Tab"):
@@ -3415,28 +3770,12 @@ class Browser(QMainWindow):
         
         if qurl is None:
             qurl = QUrl(self.homepage_url)
+        elif not isinstance(qurl, QUrl):
+            qurl = QUrl(str(qurl))
 
-        browser = CustomWebEngineView(self, private_mode=True)
-        # Create a new page with the private profile
-        from PyQt6.QtWebEngineCore import QWebEnginePage
-        private_page = QWebEnginePage(self.private_profile, browser)
-        browser.setPage(private_page)
+        browser = self._create_web_view(private_mode=True)
+        self._attach_web_view(browser, f"🔒 {label}", select=True)
         browser.setUrl(qurl)
-
-        # Add tab based on settings
-        if self.settings_manager.get('open_new_tab_next_to_current', True) and self.tabs.count() > 0:
-            current_index = self.tabs.currentIndex()
-            i = self.tabs.insertTab(current_index + 1, browser, f"🔒 {label}")
-        else:
-            i = self.tabs.addTab(browser, f"🔒 {label}")
-        self.tabs.setCurrentIndex(i)
-
-        browser.urlChanged.connect(lambda qurl, browser=browser: self.update_urlbar(qurl, browser))
-        browser.urlChanged.connect(lambda qurl, i=i: self._update_tab_favicon(i, qurl))
-        browser.loadFinished.connect(lambda _, i=i, browser=browser: self.update_title(browser))
-        browser.loadFinished.connect(lambda _, i=i, browser=browser: self.tabs.setTabText(i, f"🔒 {browser.page().title()}"))
-        browser.page().iconUrlChanged.connect(lambda _url, i=i, b=browser: self._update_tab_favicon(i, b.url()))
-
         return browser
 
     def _current_web_view(self):
@@ -3481,6 +3820,11 @@ class Browser(QMainWindow):
         qurl = widget.url()
         self.update_urlbar(qurl, widget)
         self.update_title(widget)
+        self._update_status_from_view(widget)
+        if widget in self.tab_loading_pool:
+            self._set_status_progress(0, widget)
+        else:
+            self._set_status_progress(None, widget)
 
     def close_current_tab(self, i):
         if self.tabs.count() < 2:
@@ -3494,7 +3838,16 @@ class Browser(QMainWindow):
                 self.close()
             return
 
+        closing_view = self.tabs.widget(i)
+        if isinstance(closing_view, CustomWebEngineView):
+            self.tab_loading_pool.discard(closing_view)
         self.tabs.removeTab(i)
+        current_view = self._current_web_view()
+        self._update_status_from_view(current_view)
+        if current_view and current_view in self.tab_loading_pool:
+            self._set_status_progress(0, current_view)
+        else:
+            self._set_status_progress(None, current_view)
 
     def update_title(self, browser):
         widget = self._current_web_view()
@@ -3518,6 +3871,8 @@ class Browser(QMainWindow):
         # Set full URL including the scheme
         self.url_bar.setText(q.toString(QUrl.ComponentFormattingOption.FullyEncoded))
         self.url_bar.setCursorPosition(0)
+        if current is not None:
+            self._update_status_from_view(current)
 
     def navigate_to_url(self):
         url = self.url_bar.text()
@@ -4818,6 +5173,8 @@ class Browser(QMainWindow):
         show_toolbar = self.settings_manager.get('show_toolbar', True)
         for toolbar in self.findChildren(QToolBar):
             toolbar.setVisible(show_toolbar)
+        if hasattr(self, 'status_bar'):
+            self.status_bar.setVisible(self.settings_manager.get('show_status_bar', True))
         
         # Apply web engine settings to all tabs
         self._apply_web_engine_settings()
@@ -4881,15 +5238,48 @@ class Browser(QMainWindow):
                     self.ad_blocker_rules.prefetch_domain(host)
         except Exception:
             pass
-    
-    def _on_tab_load_finished(self, tab_index, browser):
+        if browser is self._current_web_view():
+            self._set_status_progress(0, browser)
+            try:
+                qurl = browser.url()
+                host = qurl.host() or qurl.toDisplayString()
+            except Exception:
+                host = ""
+            text = f"Loading {host}..." if host else "Loading..."
+            self._show_status_message(text, 0)
+
+    def _on_tab_load_progress(self, browser, progress: int):
+        """Track page load progress for the active view."""
+        if browser not in self.tab_loading_pool:
+            self.tab_loading_pool.add(browser)
+        if browser is not self._current_web_view():
+            return
+        self._set_status_progress(progress, browser)
+        try:
+            qurl = browser.url()
+            host = qurl.host() or qurl.toDisplayString()
+        except Exception:
+            host = ""
+        if progress >= 100:
+            self._show_status_message("Loaded", 1500)
+            self._set_status_progress(None, browser)
+        else:
+            suffix = f" ({progress}%)" if progress else ""
+            text = f"Loading {host}{suffix}" if host else f"Loading{suffix}"
+            self._show_status_message(text, 0)
+
+    def _on_tab_load_finished(self, tab_index, browser, success=True):
         """Handle tab loading completion with performance optimizations"""
         # Remove from loading pool
         self.tab_loading_pool.discard(browser)
         
         # Update tab title and favicon efficiently
         self.update_title(browser)
-        self.tabs.setTabText(tab_index, browser.page().title())
+        page = browser.page() if hasattr(browser, 'page') else None
+        title = page.title() if page else ""
+        if getattr(browser, 'private_mode', False):
+            title = f"🔒 {title}" if title else "🔒"
+        self.tabs.setTabText(tab_index, title or "New Tab")
         # Update favicon post-load
         try:
             self._update_tab_favicon(tab_index, browser.url())
@@ -4897,7 +5287,9 @@ class Browser(QMainWindow):
             pass
         
         # Add to history (deferred for performance)
-        QTimer.singleShot(50, lambda: self.add_to_history(browser.url(), browser.page().title()))
+        current_url = browser.url()
+        page_title = page.title() if page else ""
+        QTimer.singleShot(50, lambda url=current_url, title=page_title: self.add_to_history(url, title))
         
         # Re-enable dev tools updates if no tabs are loading
         # Lightweight performance markers (optional) - collect and print key paint metrics
@@ -4958,6 +5350,13 @@ class Browser(QMainWindow):
                                 page.runJavaScript(js,  lambda m: self._log_perf_metrics(m))
                 except Exception:
                         pass
+        if browser is self._current_web_view():
+            self._set_status_progress(None, browser)
+            if success:
+                self._show_status_message("Loaded", 1500)
+            else:
+                self._show_status_message("Failed to load page", 3500)
+            self._update_status_from_view(browser)
 
     def _log_perf_metrics(self, metrics):
         try:
@@ -5004,7 +5403,8 @@ class Browser(QMainWindow):
             default_settings.setAttribute(QWebEngineSettings.WebAttribute.AutoLoadImages, enable_images)
             default_settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, enable_webgl)
             default_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, not enable_autoplay)
-            default_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, not block_popups)
+            # Allow window.open; pop-up blocking handled in new window handler
+            default_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, True)
             default_settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, enable_hw_accel)
         
         # Apply to all existing tabs
@@ -5018,7 +5418,7 @@ class Browser(QMainWindow):
                     page_settings.setAttribute(QWebEngineSettings.WebAttribute.AutoLoadImages, enable_images)
                     page_settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, enable_webgl)
                     page_settings.setAttribute(QWebEngineSettings.WebAttribute.PlaybackRequiresUserGesture, not enable_autoplay)
-                    page_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, not block_popups)
+                    page_settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, True)
                     page_settings.setAttribute(QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, enable_hw_accel)
         
         # Apply custom CSS/JS if provided
