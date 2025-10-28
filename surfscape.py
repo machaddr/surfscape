@@ -7,14 +7,22 @@ from urllib.parse import urlparse
 
 _DOMAIN_TOKEN_PATTERN = re.compile(r"\|\|([a-z0-9*_.-]+)")
 _PLAIN_DOMAIN_PATTERN = re.compile(r"([a-z0-9-]+(?:\.[a-z0-9-]+)+)")
+
 import argparse, concurrent.futures, threading
-from PyQt6.QtCore import QUrl, Qt , QDateTime, QThread, pyqtSignal, QObject, QStandardPaths, QTimer, QSize, QCoreApplication
+
+from PyQt6.QtCore import QUrl, Qt, QDateTime, QThread, pyqtSignal, QObject, QStandardPaths, QTimer, QSize, QCoreApplication
 from PyQt6.QtWidgets import QApplication, QMainWindow, QLineEdit, QTabWidget, QToolBar, QMessageBox, QMenu, QDialog, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton, QHBoxLayout, QColorDialog, QFontDialog, QProgressBar, QTableWidget, QTableWidgetItem, QHeaderView, QFileDialog, QCheckBox, QSpinBox, QComboBox, QSlider, QGroupBox, QGridLayout, QScrollArea, QTextEdit, QFrame, QWidget, QSplitter, QSizePolicy
 from PyQt6.QtPrintSupport import QPrinter, QPrintDialog
 from PyQt6.QtGui import QIcon, QPixmap, QAction, QKeySequence, QShortcut, QColor, QFont, QStandardItemModel, QStandardItem, QImage, QImageWriter
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtNetwork import QNetworkCookie, QNetworkProxy, QNetworkAccessManager, QNetworkRequest, QLocalServer, QLocalSocket
 from PyQt6.QtWebEngineCore import QWebEngineUrlRequestInterceptor, QWebEngineProfile, QWebEngineSettings
+
+try:  # QWebEngineContextMenuData is missing on older PyQt6 builds (e.g., Debian stable)
+    from PyQt6.QtWebEngineCore import QWebEngineContextMenuData  # type: ignore
+except ImportError:
+    QWebEngineContextMenuData = None
+
 from adblockparser import AdblockRules
 
 # --- Multi-core / thread pool utilities ------------------------------------------------------
@@ -110,6 +118,14 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
         self._clean_tp_hosts = set()
         # Resource types we may skip for safe domains (cheap, numerous)
         self._skip_types_safe = {"Image", "Font", "Media", "Favicon"}
+        # Allowlist for essential auth providers that frequently open popups
+        self._auth_allowlist = {
+            "accounts.google.com",
+            "accounts.youtube.com",
+            "oauth.googleusercontent.com",
+            "ogs.google.com",
+            "ssl.gstatic.com",
+        }
     
     def interceptRequest(self, info):
         # Capture network request details for internal diagnostics
@@ -131,6 +147,11 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
             return
         host = req_url.host()
         request_type = self._get_request_type(info.resourceType())
+
+        if host:
+            host_l = host.lower()
+            if self._is_auth_domain(host_l):
+                return
 
         options, first_party_host = self._build_adblock_options(info)
         fp = options.get('domain', '')
@@ -198,6 +219,15 @@ class NetworkRequestInterceptor(QWebEngineUrlRequestInterceptor):
             blocked_ratio = st['blocked'] / max(1, st['total'])
             if (st['total'] >= 40 and st['blocked'] == 0) or (st['total'] >= 80 and blocked_ratio <= 0.01):
                 self._safe_first_party.add(fp)
+
+    def _is_auth_domain(self, host: str) -> bool:
+        """Skip ad-blocking for whitelisted authentication providers."""
+        try:
+            if host in self._auth_allowlist:
+                return True
+            return any(host.endswith('.' + entry) for entry in self._auth_allowlist)
+        except Exception:
+            return False
     
     def _prefilter_hit(self, host: str) -> bool:
         """Check if host or its registrable parent appears in the domain prefilter set.
@@ -2207,17 +2237,105 @@ class CustomWebEngineView(QWebEngineView):
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
 
-    def contextMenuEvent(self, event):
+    def _collect_context_info_fallback(self, pos, callback):
+        """Derive context menu metadata via JavaScript when native APIs are unavailable."""
+        page = self.page()
+        if page is None:
+            if callable(callback):
+                callback({})
+            return
+
+        try:
+            device_ratio = float(self.devicePixelRatioF())
+        except Exception:
+            try:
+                device_ratio = float(self.devicePixelRatio())
+            except Exception:
+                device_ratio = 1.0
+
+        css_x = pos.x() * device_ratio
+        css_y = pos.y() * device_ratio
+
+        script = f"""
+            (function(cx, cy) {{
+                const result = {{}};
+                const x = cx / (window.devicePixelRatio || 1);
+                const y = cy / (window.devicePixelRatio || 1);
+                const element = document.elementFromPoint(x, y);
+                if (!element) {{
+                    return result;
+                }}
+
+                const anchor = element.closest('a');
+                if (anchor && anchor.href) {{
+                    result.linkUrl = anchor.href;
+                    if (anchor.hasAttribute('download')) {{
+                        result.suggestedName = anchor.getAttribute('download');
+                    }}
+                }}
+
+                const img = element.tagName === 'IMG' ? element : element.closest('img');
+                if (img && (img.currentSrc || img.src)) {{
+                    result.imageUrl = img.currentSrc || img.src;
+                    if (!result.suggestedName) {{
+                        const parts = (result.imageUrl || '').split('/');
+                        result.suggestedName = parts.length ? parts[parts.length - 1] : '';
+                    }}
+                }}
+
+                const media = element.closest('video, audio');
+                if (media) {{
+                    result.mediaUrl = media.currentSrc || media.src || '';
+                    result.mediaTag = (media.tagName || '').toLowerCase();
+                    if (!result.suggestedName) {{
+                        const mediaParts = (result.mediaUrl || '').split('/');
+                        result.suggestedName = mediaParts.length ? mediaParts[mediaParts.length - 1] : '';
+                    }}
+                }}
+
+                if (element.isContentEditable || ['INPUT', 'TEXTAREA'].includes(element.tagName)) {{
+                    result.isEditable = true;
+                }}
+
+                const selection = window.getSelection ? window.getSelection().toString() : '';
+                if (selection) {{
+                    result.selectedText = selection;
+                }}
+
+                return result;
+            }}({css_x}, {css_y}));
+        """
+
+        def _callback(value):
+            if not callable(callback):
+                return
+            result = value if isinstance(value, dict) else {}
+            try:
+                callback(result)
+            except Exception:
+                pass
+
+        try:
+            page.runJavaScript(script, _callback)
+        except Exception:
+            if callable(callback):
+                try:
+                    callback({})
+                except Exception:
+                    pass
+
+    def _show_context_menu(self, global_pos, data=None, fallback=None):
         from PyQt6.QtWebEngineCore import QWebEnginePage
 
-        menu = QMenu(self)
         page = self.page()
-        data = None
-        if page and hasattr(page, "contextMenuData"):
-            try:
-                data = page.contextMenuData()
-            except Exception:
-                data = None
+        fallback = fallback or {}
+
+        if page and hasattr(page, "createStandardContextMenu"):
+            menu = page.createStandardContextMenu()
+            # Ensure the menu has a Qt parent so it persists long enough on some builds
+            menu.setParent(self)
+        else:
+            menu = QMenu(self)
 
         link_url = None
         image_url = None
@@ -2263,94 +2381,181 @@ class CustomWebEngineView(QWebEngineView):
             except Exception:
                 is_editable = False
 
-        # Link-related actions
-        if link_url:
-            open_link_action = menu.addAction("Open Link in New Tab")
-            open_link_action.triggered.connect(lambda url=link_url: self.browser.add_new_tab(url, url.host() or "New Tab"))
+        if isinstance(fallback, dict):
+            if not link_url:
+                href = fallback.get("linkUrl")
+                if href:
+                    try:
+                        candidate = QUrl(href)
+                        if candidate.isValid():
+                            link_url = candidate
+                    except Exception:
+                        link_url = None
+            if not image_url:
+                img_src = fallback.get("imageUrl")
+                if img_src:
+                    try:
+                        candidate = QUrl(img_src)
+                        if candidate.isValid():
+                            image_url = candidate
+                    except Exception:
+                        image_url = None
+            if not media_url:
+                media_src = fallback.get("mediaUrl")
+                if media_src:
+                    try:
+                        candidate = QUrl(media_src)
+                        if candidate.isValid():
+                            media_url = candidate
+                    except Exception:
+                        media_url = None
+            if not suggested_name:
+                suggested_name = fallback.get("suggestedName", "") or ""
+            if not selected_text:
+                selected_text = fallback.get("selectedText", "") or ""
+            if not is_editable:
+                is_editable = bool(fallback.get("isEditable"))
+            if media_type is None:
+                media_tag = fallback.get("mediaTag")
+                if media_tag:
+                    media_type = media_tag
 
-            copy_link_action = menu.addAction("Copy Link Address")
+        def _menu_has(substring: str) -> bool:
+            substr = substring.lower()
+            for action in menu.actions():
+                text = action.text() or ""
+                if substr in text.lower():
+                    return True
+            return False
+
+        def _media_filename(url_obj: QUrl, fallback_name: str) -> str:
+            if suggested_name:
+                return suggested_name
+            if url_obj and url_obj.isValid():
+                candidate = os.path.basename(url_obj.path())
+                if candidate:
+                    return candidate
+            return fallback_name
+
+        # Supplement default menu with download actions when missing
+        extra_added = False
+        if image_url and not _menu_has("save image") and not _menu_has("download image"):
+            download_image_action = QAction("Download Image", menu)
+            download_image_action.triggered.connect(lambda checked=False, url=image_url: self._trigger_download(url, _media_filename(url, "image")))
+            menu.addAction(download_image_action)
+            extra_added = True
+
+        media_kind = None
+        media_is_audio = False
+        media_is_video = False
+        if media_type is not None:
+            media_type_str = str(media_type)
+            media_value = getattr(media_type, "value", None)
+            if isinstance(media_value, int):
+                media_is_audio = ("audio" in media_type_str.lower()) or media_value == 2
+                media_is_video = ("video" in media_type_str.lower()) or media_value == 3
+            else:
+                lowered = media_type_str.lower()
+                media_is_audio = "audio" in lowered
+                media_is_video = "video" in lowered
+        if media_is_audio:
+            media_kind = "audio"
+        elif media_is_video:
+            media_kind = "video"
+        elif isinstance(media_type, str):
+            lowered = media_type.lower()
+            if "audio" in lowered:
+                media_kind = "audio"
+            elif "video" in lowered:
+                media_kind = "video"
+
+        if media_url and media_kind:
+            label = "Download Audio" if media_kind == "audio" else "Download Video"
+            # Avoid duplicates when Qt already exposes save media actions
+            if not _menu_has(label.lower()) and not _menu_has("save media"):
+                download_media_action = QAction(label, menu)
+                download_media_action.triggered.connect(lambda checked=False, url=media_url: self._trigger_download(url, _media_filename(url, media_kind)))
+                menu.addAction(download_media_action)
+                extra_added = True
+
+        if extra_added:
+            menu.addSeparator()
+
+        # When the fallback kicked in, supplement basics that older Qt builds miss
+        if data is None and link_url and not _menu_has("open link"):
+            open_link_action = QAction("Open Link in New Tab", menu)
+            open_link_action.triggered.connect(lambda checked=False, url=link_url: self.browser.add_new_tab(url, url.host() or "New Tab"))
+            menu.addAction(open_link_action)
+            copy_link_action = QAction("Copy Link Address", menu)
+
             def _copy_link():
                 try:
                     text_value = link_url.toString(QUrl.UrlFormattingOption.PrettyDecoded)
                 except Exception:
                     text_value = link_url.toString()
                 QApplication.clipboard().setText(text_value)
+
             copy_link_action.triggered.connect(_copy_link)
+            menu.addAction(copy_link_action)
+
+        if data is None and page is not None and is_editable and not _menu_has("cut"):
             menu.addSeparator()
-
-        # Media download actions
-        def media_filename(url_obj: QUrl, fallback: str) -> str:
-            if suggested_name:
-                return suggested_name
-            if url_obj and url_obj.isValid():
-                candidate = os.path.basename(url_obj.path())
-                return candidate or fallback
-            return fallback
-
-        media_actions_added = False
-        if image_url:
-            download_image_action = menu.addAction("Download Image")
-            download_image_action.triggered.connect(lambda url=image_url: self._trigger_download(url, media_filename(url, "image")))
-            media_actions_added = True
-
-        media_is_audio = False
-        media_is_video = False
-        if media_type is not None:
-            media_type_str = str(media_type)
-            media_value = getattr(media_type, "value", media_type)
-            media_is_audio = ("audio" in media_type_str.lower()) or media_value == 2
-            media_is_video = ("video" in media_type_str.lower()) or media_value == 3
-        if media_url and (media_is_audio or media_is_video):
-            label = "Download Audio" if media_is_audio and not media_is_video else "Download Video"
-            download_media_action = menu.addAction(label)
-            download_media_action.triggered.connect(lambda url=media_url: self._trigger_download(url, media_filename(url, "media")))
-            media_actions_added = True
-        
-        if media_actions_added:
+            cut_action = QAction("Cut", menu)
+            cut_action.triggered.connect(lambda checked=False: page.triggerAction(QWebEnginePage.WebAction.Cut))
+            menu.addAction(cut_action)
+            copy_action = QAction("Copy", menu)
+            copy_action.triggered.connect(lambda checked=False: page.triggerAction(QWebEnginePage.WebAction.Copy))
+            menu.addAction(copy_action)
+            paste_action = QAction("Paste", menu)
+            paste_action.triggered.connect(lambda checked=False: page.triggerAction(QWebEnginePage.WebAction.Paste))
+            menu.addAction(paste_action)
+        elif data is None and selected_text and page is not None and not _menu_has("copy"):
             menu.addSeparator()
+            copy_selection_action = QAction("Copy Selection", menu)
+            copy_selection_action.triggered.connect(lambda checked=False: page.triggerAction(QWebEnginePage.WebAction.Copy))
+            menu.addAction(copy_selection_action)
 
-        # Editing / clipboard actions
-        if is_editable:
-            cut_action = menu.addAction("Cut")
-            cut_action.triggered.connect(lambda: page.triggerAction(QWebEnginePage.WebAction.Cut))
-            copy_action = menu.addAction("Copy")
-            copy_action.triggered.connect(lambda: page.triggerAction(QWebEnginePage.WebAction.Copy))
-            paste_action = menu.addAction("Paste")
-            paste_action.triggered.connect(lambda: page.triggerAction(QWebEnginePage.WebAction.Paste))
-            menu.addSeparator()
-        elif selected_text:
-            copy_selection_action = menu.addAction("Copy Selection")
-            copy_selection_action.triggered.connect(lambda: page.triggerAction(QWebEnginePage.WebAction.Copy))
-            menu.addSeparator()
+        menu.exec(global_pos)
 
-        # Standard navigation actions
-        back_action = menu.addAction("← Back")
-        back_action.triggered.connect(self.back)
-        back_action.setEnabled(self.history().canGoBack())
+    def contextMenuEvent(self, event):
+        page = self.page()
+        data = None
+        if page and hasattr(page, "contextMenuData"):
+            try:
+                data = page.contextMenuData()
+            except Exception:
+                data = None
 
-        forward_action = menu.addAction("→ Forward")
-        forward_action.triggered.connect(self.forward)
-        forward_action.setEnabled(self.history().canGoForward())
+        global_pos = event.globalPos()
+        widget_pos = event.pos()
 
-        reload_action = menu.addAction("⟳ Reload")
-        reload_action.triggered.connect(self.reload)
+        need_fallback = data is None
+        if not need_fallback and data is not None:
+            has_link = False
+            has_image = False
+            has_media = False
+            try:
+                link = data.linkUrl()
+                has_link = bool(link and link.isValid())
+            except Exception:
+                has_link = False
+            try:
+                img = data.imageUrl()
+                has_image = bool(img and img.isValid())
+            except Exception:
+                has_image = False
+            try:
+                media = data.mediaUrl()
+                has_media = bool(media and media.isValid())
+            except Exception:
+                has_media = False
+            need_fallback = not (has_link or has_image or has_media)
 
-        menu.addSeparator()
+        if need_fallback:
+            self._collect_context_info_fallback(widget_pos, lambda info, gp=global_pos, d=data: self._show_context_menu(gp, d, info))
+            return
 
-        # Page actions
-        view_source_action = menu.addAction("View Page Source")
-        view_source_action.triggered.connect(self.browser.view_source)
-
-        print_action = menu.addAction("Print...")
-        print_action.triggered.connect(self.browser.print_page)
-
-        menu.addSeparator()
-
-        # Bookmark action
-        bookmark_action = menu.addAction("Add to Bookmarks")
-        bookmark_action.triggered.connect(self.browser.toggle_bookmark)
-
-        menu.exec(event.globalPos())
+        self._show_context_menu(global_pos, data, None)
 
     def _trigger_download(self, url: QUrl, suggested_filename: str | None = None):
         if not url or not url.isValid():
@@ -2358,33 +2563,77 @@ class CustomWebEngineView(QWebEngineView):
         page = self.page()
         if page is None:
             return
-        profile = page.profile()
-        filename = (suggested_filename or "").strip()
-        try:
-            if profile:
-                if filename:
-                    profile.download(url, filename)
-                else:
-                    profile.download(url)
-            else:
-                if filename:
-                    page.download(url, filename)
-                else:
-                    page.download(url)
-            if self.browser and hasattr(self.browser, "_notify_download_started"):
-                self.browser._notify_download_started(url)
-        except TypeError:
+        if self.browser:
             try:
-                profile.download(url)
+                self.browser._ensure_download_manager()
             except Exception:
                 pass
-        except Exception as exc:
-            print(f"Failed to start download for {url.toString()}: {exc}")
+        profile = page.profile()
+        filename = (suggested_filename or "").strip()
+        download_request = None
+        try:
+            target_name = filename if filename else ""
+            download_request = page.download(url, target_name)
+        except Exception:
+            download_request = None
+        if download_request is None and profile:
+            try:
+                if filename:
+                    download_request = profile.download(url, filename)
+                else:
+                    download_request = profile.download(url)
+            except Exception:
+                download_request = None
+        if download_request is None and profile is None:
+            try:
+                download_request = page.download(url)
+            except Exception:
+                download_request = None
+        if download_request is not None and hasattr(self.browser, "_notify_download_started"):
+            self.browser._notify_download_started(url)
+        elif download_request is None:
+            print(f"Failed to start download for {url.toString()}: unsupported by profile/page")
+            return
 
     def createWindow(self, web_window_type):
         if getattr(self, "_legacy_create_window", False):
             return self.browser._create_window_from_create_window(self, web_window_type)
         return super().createWindow(web_window_type)
+
+# --- Popup window container -------------------------------------------------------------------
+
+class PopupWebDialog(QDialog):
+    closed = pyqtSignal()
+
+    def __init__(self, browser, source_view, title: str = ""):
+        super().__init__(browser)
+        self.browser = browser
+        self.source_view = source_view
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.setWindowTitle(title or "Popup")
+        self.resize(900, 640)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        private_mode = getattr(source_view, 'private_mode', False)
+        self.web_view = browser._create_web_view(private_mode=private_mode)
+        layout.addWidget(self.web_view)
+        try:
+            browser.apply_settings_to_new_tab(self.web_view)
+            page = self.web_view.page()
+            if page and hasattr(page, "windowCloseRequested"):
+                page.windowCloseRequested.connect(self.close)
+        except Exception:
+            pass
+
+    def closeEvent(self, event):
+        try:
+            self.closed.emit()
+        except Exception:
+            pass
+        super().closeEvent(event)
 
 # --- Claude AI Integration --------------------------------------------------------------------
 
@@ -3384,6 +3633,8 @@ class Browser(QMainWindow):
         # Lazy heavy components
         self.download_manager = None
         self.find_dialog = None
+        self._popup_windows = []
+        self._download_profiles_connected = set()
 
         # Profiles & interceptors
         self.network_interceptor = NetworkRequestInterceptor(self, self.ad_blocker_rules, is_private=False)
@@ -3481,10 +3732,25 @@ class Browser(QMainWindow):
         if attr in ('bookmarks', 'history'):
             self.update_url_autocomplete()
 
+    def _connect_download_profile(self, profile: QWebEngineProfile | None):
+        """Ensure downloadRequested is hooked exactly once per profile."""
+        if profile is None:
+            return
+        key = id(profile)
+        if key in self._download_profiles_connected:
+            return
+        try:
+            profile.downloadRequested.connect(self.handle_download_request)
+            self._download_profiles_connected.add(key)
+        except Exception as exc:
+            print(f"Failed to connect download handler for profile: {exc}")
+
     def _ensure_download_manager(self):
         if self.download_manager is None:
             self.download_manager = DownloadManager(self)
-            QWebEngineProfile.defaultProfile().downloadRequested.connect(self.handle_download_request)
+            self._connect_download_profile(QWebEngineProfile.defaultProfile())
+            if hasattr(self, 'private_profile'):
+                self._connect_download_profile(getattr(self, 'private_profile', None))
         return self.download_manager
 
     def _ensure_find_dialog(self):
@@ -3610,6 +3876,12 @@ class Browser(QMainWindow):
             requested_url = request.requestedUrl()
         except Exception:
             requested_url = QUrl()
+        host = ""
+        try:
+            if requested_url and requested_url.isValid():
+                host = requested_url.host().lower()
+        except Exception:
+            host = ""
 
         is_user_initiated = True
         try:
@@ -3617,7 +3889,16 @@ class Browser(QMainWindow):
         except Exception:
             pass
 
-        if self.settings_manager.get('block_popups', True) and not is_user_initiated:
+        allow_popup = False
+        if host:
+            allow_list = set()
+            if hasattr(self.network_interceptor, "_auth_allowlist"):
+                allow_list.update(self.network_interceptor._auth_allowlist)
+            if hasattr(self.private_network_interceptor, "_auth_allowlist"):
+                allow_list.update(self.private_network_interceptor._auth_allowlist)
+            allow_popup = host in allow_list or any(host.endswith('.' + domain) for domain in allow_list)
+
+        if self.settings_manager.get('block_popups', True) and not is_user_initiated and not allow_popup:
             try:
                 request.reject()
             except Exception:
@@ -3632,33 +3913,35 @@ class Browser(QMainWindow):
                 label = requested_url.toDisplayString(QUrl.UrlFormattingOption.RemoveScheme)
             except Exception:
                 label = requested_url.toDisplayString()
-        label = label or "New Tab"
-        new_view = self._create_web_view(private_mode=private_mode)
-        select_tab = True
-        try:
-            destination = request.destination()
-            dest_name = getattr(destination, "name", str(destination))
-            if dest_name and "Background" in dest_name:
-                select_tab = False
-        except Exception:
-            pass
-        tab_index = self._attach_web_view(new_view, label, select=select_tab)
+        label = label or "Popup"
+        popup = PopupWebDialog(self, source_view, label)
 
+        # Track popup lifetime so it is not garbage-collected early
+        self._popup_windows.append(popup)
+
+        def _cleanup_popup():
+            if popup in self._popup_windows:
+                self._popup_windows.remove(popup)
+
+        popup.closed.connect(_cleanup_popup)
+        popup.destroyed.connect(lambda *_: _cleanup_popup())
+
+        popup_view = popup.web_view
         try:
-            request.setNewPage(new_view.page())
+            request.setNewPage(popup_view.page())
             request.accept()
         except Exception:
             if requested_url and requested_url.isValid():
-                new_view.setUrl(requested_url)
+                popup_view.setUrl(requested_url)
             try:
                 request.accept()
             except Exception:
                 pass
 
-        if tab_index >= 0:
-            self.tabs.setTabText(tab_index, label)
-        if select_tab:
-            self._show_status_message("Opened in new tab", 2000)
+        popup.show()
+        popup.raise_()
+        popup.activateWindow()
+        self._show_status_message("Opened popup window", 2000)
 
     def _create_window_from_create_window(self, source_view: CustomWebEngineView, web_window_type):
         """Legacy fallback when Qt does not expose newWindowRequested."""
@@ -3667,10 +3950,21 @@ class Browser(QMainWindow):
             self._show_status_message("Popup blocked", 3000)
             return None
         private_mode = getattr(source_view, 'private_mode', False)
-        new_view = self._create_web_view(private_mode=private_mode)
-        self._attach_web_view(new_view, "New Tab", select=True)
-        self._show_status_message("Opened in new tab", 2000)
-        return new_view
+        popup = PopupWebDialog(self, source_view, "Popup")
+        self._popup_windows.append(popup)
+
+        def _cleanup():
+            if popup in self._popup_windows:
+                self._popup_windows.remove(popup)
+
+        popup.closed.connect(_cleanup)
+        popup.destroyed.connect(lambda *_: _cleanup())
+
+        popup.show()
+        popup.raise_()
+        popup.activateWindow()
+        self._show_status_message("Opened popup window", 2000)
+        return popup.web_view
 
     def _update_status_from_view(self, view: CustomWebEngineView | None):
         if not hasattr(self, 'status_bar'):
@@ -5508,11 +5802,60 @@ class Browser(QMainWindow):
             QNetworkProxy.setApplicationProxy(proxy)
 
     def handle_download_request(self, download_request):
-        download_item = DownloadItem(download_request)
         dm = self._ensure_download_manager()
+
+        ask_location = self.settings_manager.get('ask_download_location', True)
+        target_dir = self.settings_manager.get('download_directory', '').strip()
+        default_dir = target_dir or QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
+
+        save_directory = default_dir
+        save_filename = download_request.suggestedFileName()
+
+        if ask_location:
+            try:
+                initial_path = os.path.join(default_dir, save_filename) if default_dir else save_filename
+                selected_path, _ = QFileDialog.getSaveFileName(self, "Save Download As", initial_path)
+            except Exception:
+                selected_path = ""
+            if not selected_path:
+                download_request.cancel()
+                return
+            save_directory, save_filename = os.path.dirname(selected_path), os.path.basename(selected_path)
+        else:
+            if not save_directory:
+                save_directory = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
+            try:
+                os.makedirs(save_directory, exist_ok=True)
+            except Exception as exc:
+                QMessageBox.warning(self, "Download Failed", f"Could not create download directory:\n{exc}")
+                download_request.cancel()
+                return
+
+        download_item = DownloadItem(download_request)
+        download_item.filename = save_filename
+        try:
+            download_request.setDownloadDirectory(save_directory)
+            download_request.setDownloadFileName(save_filename)
+        except Exception:
+            pass
         dm.add_download(download_item)
+
+        auto_open = self.settings_manager.get('auto_open_downloads', False)
+        if auto_open:
+            def _auto_open():
+                try:
+                    if os.name == 'nt':
+                        os.startfile(os.path.join(save_directory, save_filename))
+                    elif sys.platform == 'darwin':
+                        os.system(f'open "{os.path.join(save_directory, save_filename)}"')
+                    else:
+                        os.system(f'xdg-open "{os.path.join(save_directory, save_filename)}"')
+                except Exception:
+                    pass
+            download_request.finished.connect(_auto_open)
+
         download_request.accept()
-    
+
     def show_download_manager(self):
         dm = self._ensure_download_manager()
         dm.show()
@@ -5742,4 +6085,4 @@ if __name__ == "__main__":
     except Exception:
         pass
     sys.exit(exit_code)
-    
+
