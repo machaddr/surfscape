@@ -3906,42 +3906,41 @@ class Browser(QMainWindow):
             self._show_status_message("Popup blocked", 3000)
             return
 
-        private_mode = getattr(source_view, 'private_mode', False)
         label = requested_url.host() if requested_url and requested_url.isValid() else ""
         if not label and requested_url and requested_url.isValid():
             try:
                 label = requested_url.toDisplayString(QUrl.UrlFormattingOption.RemoveScheme)
             except Exception:
                 label = requested_url.toDisplayString()
-        label = label or "Popup"
-        popup = PopupWebDialog(self, source_view, label)
+        label = label or "New Tab"
 
-        # Track popup lifetime so it is not garbage-collected early
-        self._popup_windows.append(popup)
-
-        def _cleanup_popup():
-            if popup in self._popup_windows:
-                self._popup_windows.remove(popup)
-
-        popup.closed.connect(_cleanup_popup)
-        popup.destroyed.connect(lambda *_: _cleanup_popup())
-
-        popup_view = popup.web_view
+        private_mode = getattr(source_view, 'private_mode', False)
+        new_view = self._create_web_view(private_mode=private_mode)
+        select_tab = True
         try:
-            request.setNewPage(popup_view.page())
+            destination = request.destination()
+            dest_name = getattr(destination, "name", str(destination))
+            if dest_name and "Background" in dest_name:
+                select_tab = False
+        except Exception:
+            pass
+        tab_index = self._attach_web_view(new_view, label, select=select_tab)
+
+        try:
+            request.setNewPage(new_view.page())
             request.accept()
         except Exception:
             if requested_url and requested_url.isValid():
-                popup_view.setUrl(requested_url)
+                new_view.setUrl(requested_url)
             try:
                 request.accept()
             except Exception:
                 pass
 
-        popup.show()
-        popup.raise_()
-        popup.activateWindow()
-        self._show_status_message("Opened popup window", 2000)
+        if tab_index >= 0:
+            self.tabs.setTabText(tab_index, label)
+        if select_tab:
+            self._show_status_message("Opened in new tab", 2000)
 
     def _create_window_from_create_window(self, source_view: CustomWebEngineView, web_window_type):
         """Legacy fallback when Qt does not expose newWindowRequested."""
@@ -3950,21 +3949,10 @@ class Browser(QMainWindow):
             self._show_status_message("Popup blocked", 3000)
             return None
         private_mode = getattr(source_view, 'private_mode', False)
-        popup = PopupWebDialog(self, source_view, "Popup")
-        self._popup_windows.append(popup)
-
-        def _cleanup():
-            if popup in self._popup_windows:
-                self._popup_windows.remove(popup)
-
-        popup.closed.connect(_cleanup)
-        popup.destroyed.connect(lambda *_: _cleanup())
-
-        popup.show()
-        popup.raise_()
-        popup.activateWindow()
-        self._show_status_message("Opened popup window", 2000)
-        return popup.web_view
+        new_view = self._create_web_view(private_mode=private_mode)
+        self._attach_web_view(new_view, "New Tab", select=True)
+        self._show_status_message("Opened in new tab", 2000)
+        return new_view
 
     def _update_status_from_view(self, view: CustomWebEngineView | None):
         if not hasattr(self, 'status_bar'):
