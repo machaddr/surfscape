@@ -3881,12 +3881,6 @@ class Browser(QMainWindow):
         except Exception:
             host = ""
 
-        is_user_initiated = True
-        try:
-            is_user_initiated = bool(request.isUserInitiated())
-        except Exception:
-            pass
-
         allow_popup = False
         if host:
             allow_list = set()
@@ -3896,12 +3890,31 @@ class Browser(QMainWindow):
                 allow_list.update(self.private_network_interceptor._auth_allowlist)
             allow_popup = host in allow_list or any(host.endswith('.' + domain) for domain in allow_list)
 
-        if self.settings_manager.get('block_popups', True) and not is_user_initiated and not allow_popup:
+        is_user_initiated = True
+        try:
+            is_user_initiated = bool(request.isUserInitiated())
+        except Exception:
+            pass
+
+        block_popups_enabled = self.settings_manager.get('block_popups', True)
+        if block_popups_enabled and not allow_popup:
+            handled_in_place = False
+            if is_user_initiated and requested_url and requested_url.isValid():
+                target_view = source_view if isinstance(source_view, CustomWebEngineView) else self._current_web_view()
+                if target_view is not None:
+                    try:
+                        target_view.setUrl(requested_url)
+                        handled_in_place = True
+                    except Exception:
+                        handled_in_place = False
             try:
                 request.reject()
             except Exception:
                 pass
-            self._show_status_message("Popup blocked", 3000)
+            if handled_in_place:
+                self._show_status_message("Opened in current tab", 2000)
+            else:
+                self._show_status_message("Popup blocked", 3000)
             return
 
         label = requested_url.host() if requested_url and requested_url.isValid() else ""
@@ -6071,4 +6084,3 @@ if __name__ == "__main__":
     except Exception:
         pass
     sys.exit(exit_code)
-
