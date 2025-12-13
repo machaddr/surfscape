@@ -2639,9 +2639,7 @@ class AdBlockerWorker:
         # 2. If no fresh cache, download in background (still inside this async)
         if not lines:
             urls = [
-                "https://easylist.to/easylist/easylist.txt",
-                "https://easylist.to/easylist/easyprivacy.txt",
-                "https://easylist.to/easylist/fanboy-annoyance.txt"
+                "https://easylist.to/easylist/easylist.txt"
             ]
             texts = []
             try:
