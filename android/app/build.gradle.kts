@@ -11,8 +11,8 @@ android {
         applicationId = "com.surfscape.browser"
         minSdk = 21
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.1"
+        versionCode = 2
+        versionName = "1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true

@@ -3,7 +3,7 @@
 
 ; Accept /DVersion, /DDistDir, /DOutputDir passed from ISCC; otherwise fall back to defaults
 #ifndef Version
-#define Version "1.0"
+#define Version "1.2"
 #endif
 
 #ifndef DistDir

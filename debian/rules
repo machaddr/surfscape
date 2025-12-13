@@ -30,8 +30,17 @@ override_dh_auto_install:
 	install -d debian/surfscape/usr/share/applications
 	install -m 644 debian/surfscape.desktop debian/surfscape/usr/share/applications/
 	
+	# Install icons in multiple sizes for better system integration
+	install -d debian/surfscape/usr/share/icons/hicolor/16x16/apps
+	install -d debian/surfscape/usr/share/icons/hicolor/32x32/apps
+	install -d debian/surfscape/usr/share/icons/hicolor/48x48/apps
+	install -d debian/surfscape/usr/share/icons/hicolor/128x128/apps
 	install -d debian/surfscape/usr/share/icons/hicolor/256x256/apps
-	install -m 644 screenshots/browser.png debian/surfscape/usr/share/icons/hicolor/256x256/apps/surfscape.png
+	install -m 644 icon/icon-16.png debian/surfscape/usr/share/icons/hicolor/16x16/apps/surfscape.png
+	install -m 644 icon/icon-32.png debian/surfscape/usr/share/icons/hicolor/32x32/apps/surfscape.png
+	install -m 644 icon/icon-48.png debian/surfscape/usr/share/icons/hicolor/48x48/apps/surfscape.png
+	install -m 644 icon/icon-128.png debian/surfscape/usr/share/icons/hicolor/128x128/apps/surfscape.png
+	install -m 644 icon/icon.png debian/surfscape/usr/share/icons/hicolor/256x256/apps/surfscape.png
 	
 	# Install documentation
 	install -d debian/surfscape/usr/share/doc/surfscape
