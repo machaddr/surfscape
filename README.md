@@ -63,6 +63,16 @@ brew install portaudio
 - Python 3.6 or higher (from python.org)
 - Microsoft Visual C++ Build Tools
 - make utility (via Chocolatey, MSYS2, or WSL)
+- PortAudio development files (optional, for voice input)
+
+Optional voice input on Windows:
+```cmd
+git clone https://github.com/microsoft/vcpkg C:\vcpkg
+cd C:\vcpkg
+.\bootstrap-vcpkg.bat
+.\vcpkg.exe install portaudio:x64-windows
+setx VCPKG_PATH C:\vcpkg
+```
 
 ```cmd
 # Using Chocolatey
@@ -199,14 +209,16 @@ If you want to run Surfscape from source code, make sure you have the following 
 - [PyQt6 WebEngine](https://pypi.org/project/PyQt6-WebEngine/)
 - [Adblockparser](https://pypi.org/project/adblockparser/)
 - [Anthropic](https://pypi.org/project/anthropic/)
-- [PyAudio](https://pypi.org/project/PyAudio/)
-- [SpeechRecognition](https://pypi.org/project/SpeechRecognition/)
+- [SpeechRecognition](https://pypi.org/project/SpeechRecognition/) (optional, voice input)
+- [PyAudio](https://pypi.org/project/PyAudio/) (optional, voice input; requires PortAudio dev libs)
 - [markdown](https://pypi.org/project/markdown/)
 
 You can install these dependencies using `pip`, the Python package installer. Open a terminal or command prompt and run the following command:
 
 ```bash
-pip install PyQt6 PyQt6-WebEngine adblockparser anthropic pyaudio SpeechRecognition markdown
+pip install -r requirements.txt
+# Optional voice input support
+pip install -r requirements-voice.txt
 ```
 
 Or you can install these dependencies using the package manager of your favorite Linux Distribution.
@@ -255,7 +267,7 @@ Notes:
 2. **PyAudio installation fails**:
    - **Linux**: Use `make install-system-deps` to install system dependencies
    - **macOS**: Install with `brew install portaudio`
-   - **Windows**: Install Visual C++ Build Tools
+   - **Windows**: Install Visual C++ Build Tools and PortAudio dev files (e.g., via vcpkg), then install `requirements-voice.txt`
 
 3. **Python virtual environment issues**:
    - Run `make clean-all` then `make build` to recreate the environment

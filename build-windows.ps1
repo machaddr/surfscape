@@ -102,7 +102,18 @@ if (-not (Test-Path $venvPython)) { throw "Unable to locate venv python interpre
 
 Write-Step "Upgrading pip and installing requirements"
 & $venvPython -m pip install --upgrade pip wheel setuptools
+if ($LASTEXITCODE -ne 0) { throw "Failed to upgrade pip/setuptools/wheel" }
 & $venvPython -m pip install -r requirements.txt
+if ($LASTEXITCODE -ne 0) { throw "Failed to install requirements.txt" }
+
+$voiceReq = "requirements-voice.txt"
+if (Test-Path $voiceReq) {
+    Write-Step "Installing optional voice dependencies"
+    & $venvPython -m pip install -r $voiceReq
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Warning: optional voice dependencies failed to install. Voice input will be disabled." -ForegroundColor Yellow
+    }
+}
 
 # Verify PyInstaller available
 Write-Step "Verifying PyInstaller availability"

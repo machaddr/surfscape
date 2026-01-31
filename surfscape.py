@@ -2,8 +2,18 @@
 
 from __future__ import annotations
 
-import os, sys, json, asyncio, aiohttp, re, pyaudio, speech_recognition as sr, anthropic, markdown, time, platform, pickle
+import os, sys, json, asyncio, aiohttp, re, anthropic, markdown, time, platform, pickle
 from urllib.parse import urlparse
+
+try:
+    import speech_recognition as sr
+except ImportError:
+    sr = None
+
+try:
+    import pyaudio
+except ImportError:
+    pyaudio = None
 
 _DOMAIN_TOKEN_PATTERN = re.compile(r"\|\|([a-z0-9*_.-]+)")
 _PLAIN_DOMAIN_PATTERN = re.compile(r"([a-z0-9-]+(?:\.[a-z0-9-]+)+)")
@@ -2733,6 +2743,11 @@ class ClaudeAIWidget(QWidget):
         self.is_listening = False  # Flag to track voice input state
         self.microphone_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         controls_layout.addWidget(self.microphone_button)
+
+        if not self._voice_available():
+            self.microphone_button.setEnabled(False)
+            self.microphone_button.setToolTip("Voice input unavailable. Install PyAudio (PortAudio) to enable.")
+            self.language_selector.setEnabled(False)
         
         # Add a send button to send the input
         self.layout.addLayout(controls_layout)
@@ -2772,6 +2787,17 @@ class ClaudeAIWidget(QWidget):
             self.markdown_module = markdown
         except ImportError:
             self.markdown_module = None
+
+    def _voice_available(self):
+        return pyaudio is not None and sr is not None
+
+    def _notify_voice_unavailable(self):
+        QMessageBox.information(
+            self,
+            "Voice Input Unavailable",
+            "Voice input requires PyAudio (PortAudio) and SpeechRecognition. "
+            "Install the optional voice dependencies to enable this feature."
+        )
             
     def toggle_voice_input(self):
         if self.is_listening:
@@ -2780,6 +2806,14 @@ class ClaudeAIWidget(QWidget):
             self.start_listening()
             
     def start_listening(self):
+        if not self._voice_available():
+            self._notify_voice_unavailable()
+            self.is_listening = False
+            self.microphone_button.setStyleSheet("")
+            self.microphone_button.setText("Mic")
+            self.input_field.setPlaceholderText("")
+            return
+
         self.is_listening = True
         self.microphone_button.setStyleSheet("background-color: red;")
         self.microphone_button.setText("Stop")
