@@ -151,8 +151,8 @@ function Find-ISCC {
     )
     foreach ($c in $candidates) { if (Test-Path $c) { return $c } }
     # Try via PATH
-    $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue)?.Source
-    if ($iscc) { return $iscc }
+    $cmd = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source) { return $cmd.Source }
     return $null
 }
 
